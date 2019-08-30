@@ -77,7 +77,7 @@ public class FrameworkModuleTestCase extends ModulesTestBase {
         specBuilderA.addDependency(DependencySpec.createLocalDependencySpec());
         addModuleSpec(specBuilderA.create());
 
-        assertLoadClass(identifierA, "javax.security.auth.x500.X500Principal", identifierA);
+        assertLoadClass(identifierA, "javax.accessibility.AccessibleTextSequence", identifierA);
         assertLoadClassFail(identifierA, "org.osgi.framework.Bundle");
     }
 
@@ -94,7 +94,7 @@ public class FrameworkModuleTestCase extends ModulesTestBase {
         addModuleSpec(specBuilderA.create());
 
         assertLoadClassFail(identifierA, "org.osgi.framework.Bundle");
-        assertLoadClass(identifierA, "javax.security.auth.x500.X500Principal");
+        assertLoadClass(identifierA, "javax.accessibility.AccessibleTextSequence");
     }
 
     @Test
@@ -108,7 +108,7 @@ public class FrameworkModuleTestCase extends ModulesTestBase {
         addModuleSpec(specBuilderF.create());
 
         assertLoadClass(identifierF, "org.osgi.framework.Bundle");
-        assertLoadClassFail(identifierF, "javax.security.auth.x500.X500Principal");
+        assertLoadClassFail(identifierF, "javax.accessibility.AccessibleTextSequence");
     }
 
     @Test
@@ -150,7 +150,7 @@ public class FrameworkModuleTestCase extends ModulesTestBase {
         addModuleSpec(specBuilderA.create());
 
         assertLoadClass(identifierA, "org.osgi.framework.Bundle");
-        assertLoadClass(identifierA, "javax.security.auth.x500.X500Principal");
+        assertLoadClass(identifierA, "javax.accessibility.AccessibleTextSequence");
     }
 
     private Set<String> getFrameworkPaths() {
@@ -171,7 +171,7 @@ public class FrameworkModuleTestCase extends ModulesTestBase {
 
     private JavaArchive getModuleA() {
         final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, "moduleA");
-        archive.addClass("javax.security.auth.x500.X500Principal");
+        archive.addClass("javax.accessibility.AccessibleTextSequence");
         archive.setManifest(new Asset() {
             public InputStream openStream() {
                 OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();

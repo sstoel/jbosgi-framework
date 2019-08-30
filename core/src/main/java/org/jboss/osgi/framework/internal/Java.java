@@ -61,6 +61,9 @@ public final class Java {
     public static final int VERSION_1_6 = 0x07;
     public static final int VERSION_1_7 = 0x08;
     public static final int VERSION_1_8 = 0x09;
+    public static final int VERSION_1_9 = 0x0A;
+    public static final int VERSION_1_10 = 0x0B;
+    public static final int VERSION_1_11 = 0x0C;
 
     /**
      * Private to avoid over optimization by the compiler.
@@ -103,8 +106,21 @@ public final class Java {
             Class.forName("java.nio.file.FileStore");
             version = VERSION_1_7;
 
+            // check for 1.8
             Class.forName("java.util.stream.Collectors");
             version = VERSION_1_8;
+
+            // check for 1.9
+            Class.forName("java.lang.ProcessHandle");
+            version = VERSION_1_9;
+
+//            // check for 1.10
+//            Class.forName("java.util.stream.Collectors");
+//            version = VERSION_1_10;
+
+            // check for 1.11
+            Class.forName("java.lang.invoke.ConstantBootstraps");
+            version = VERSION_1_11;
         } catch (ClassNotFoundException ignore) {
         }
         VERSION = version;

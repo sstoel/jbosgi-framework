@@ -34,7 +34,6 @@ import org.jboss.osgi.framework.spi.ModuleManager;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.junit.Before;
 import org.junit.Test;
-import org.omg.CORBA.ORB;
 import org.osgi.framework.BundleActivator;
 
 /**
@@ -66,16 +65,6 @@ public class FrameworkClassLoaderTestCase extends AbstractFrameworkTest {
         Class<?> result = classLoader.loadClass(MBeanServer.class.getName());
         assertNotNull("MBeanServer loaded", result);
         assertTrue("Is assignable", MBeanServer.class.isAssignableFrom(result));
-    }
-
-    @Test
-    public void testLoadJavaXFail() throws Exception {
-        try {
-            classLoader.loadClass(ORB.class.getName());
-            fail("ClassNotFoundException expected");
-        } catch (ClassNotFoundException ex) {
-            // expected
-        }
     }
 
     @Test

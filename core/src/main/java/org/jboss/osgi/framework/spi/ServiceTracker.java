@@ -117,6 +117,7 @@ public class ServiceTracker<S> extends AbstractServiceListener<S> {
                         serviceStartFailed(controller);
                         serviceCompleteInternal(controller, true);
                         break;
+                    case DOWN_to_WONT_START:
                     case START_REQUESTED_to_DOWN:
                         serviceCompleteInternal(controller, false);
                         break;

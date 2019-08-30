@@ -73,8 +73,8 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
                 throw MESSAGES.duplicatePackageImport(packageName, brev);
             packages.add(packageName);
 
-            if (packageName.startsWith("java."))
-                throw MESSAGES.notAllowdToImportJavaPackage(brev);
+//            if (packageName.startsWith("java."))
+//                throw MESSAGES.notAllowdToImportJavaPackage(brev);
 
             String version = packageAttribute.getAttributeValue(VERSION_ATTRIBUTE, String.class);
             String specificationVersion = packageAttribute.getAttributeValue(PACKAGE_SPECIFICATION_VERSION, String.class);

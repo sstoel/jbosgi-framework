@@ -30,6 +30,7 @@ import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 
+import javax.accessibility.AccessibleTextSequence;
 import javax.security.auth.x500.X500Principal;
 
 import org.jboss.osgi.metadata.OSGiManifestBuilder;
@@ -72,35 +73,35 @@ public class BootDelegationTestCase extends OSGiTest {
 
     @Test
     public void testNoWildcard() throws Exception {
-        doTestBootDelegation("javax.security.auth.x500", true);
+        doTestBootDelegation("javax.security.auth.x500", true, "javax.security.auth.x500.X500Principal");
     }
 
     @Test
     public void testWildcardOne() throws Exception {
-        doTestBootDelegation("javax.security.auth.*", true);
+        doTestBootDelegation("javax.security.auth.*", true, "javax.security.auth.x500.X500Principal");
     }
 
     @Test
     public void testWildcardTwo() throws Exception {
-        doTestBootDelegation("javax.security.*", true);
+        doTestBootDelegation("javax.security.*", true, "javax.security.auth.x500.X500Principal");
     }
 
     @Test
     public void testWildcardAll() throws Exception {
-        doTestBootDelegation("*", true);
+        doTestBootDelegation("*", true, "javax.security.auth.x500.X500Principal");
     }
 
     @Test
     public void testNullBootDelegation() throws Exception {
-        doTestBootDelegation(null, false);
+        doTestBootDelegation(null, false, "javax.accessibility.AccessibleTextSequence");
     }
 
     @Test
     public void testJunkBootDelegation() throws Exception {
-        doTestBootDelegation("junk.*", false);
+        doTestBootDelegation("junk.*", false, "javax.accessibility.AccessibleTextSequence");
     }
 
-    private void doTestBootDelegation(String bootDelegation, boolean fromBoot) throws Exception {
+    private void doTestBootDelegation(String bootDelegation, boolean fromBoot, final String clazz) throws Exception {
         Map<String, String> configuration = new HashMap<String, String>();
         configuration.put("org.osgi.framework.storage", "target/osgi-store");
         configuration.put("org.osgi.framework.storage.clean", "onFirstInit");
@@ -118,7 +119,7 @@ public class BootDelegationTestCase extends OSGiTest {
             Class<?> testClass = null;
             ClassLoader classLoader = null;
             try {
-                testClass = testBundle.loadClass("javax.security.auth.x500.X500Principal");
+                testClass = testBundle.loadClass(clazz);
                 assertNotNull("Test class not null", testClass);
                 classLoader = testClass.getClassLoader();
             } catch (ClassNotFoundException e) {
@@ -144,6 +145,7 @@ public class BootDelegationTestCase extends OSGiTest {
     private JavaArchive getTestArchive() {
         final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, "bootdelegation");
         archive.addClasses(X500Principal.class);
+        archive.addClasses(AccessibleTextSequence.class);
         archive.setManifest(new Asset() {
             public InputStream openStream() {
                 OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();

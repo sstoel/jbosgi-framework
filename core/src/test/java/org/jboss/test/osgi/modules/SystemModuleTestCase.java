@@ -72,7 +72,7 @@ public class SystemModuleTestCase extends ModulesTestBase {
         specBuilderA.addResourceRoot(ResourceLoaderSpec.createResourceLoaderSpec(resourceLoaderA));
         specBuilderA.addDependency(DependencySpec.createLocalDependencySpec());
         addModuleSpec(specBuilderA.create());
-        assertLoadClass(identifierA, "javax.security.auth.x500.X500Principal", identifierA);
+        assertLoadClass(identifierA, "javax.accessibility.AccessibleTextSequence", identifierA);
     }
 
     @Test
@@ -129,6 +129,7 @@ public class SystemModuleTestCase extends ModulesTestBase {
     private JavaArchive getModuleA() {
         final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, "moduleA");
         archive.addClass("javax.security.auth.x500.X500Principal");
+        archive.addClass("javax.accessibility.AccessibleTextSequence");
         archive.setManifest(new Asset() {
             public InputStream openStream() {
                 OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();

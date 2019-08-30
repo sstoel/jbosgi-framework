@@ -65,6 +65,8 @@ public interface SystemPaths {
     };
 
     String[] DEFAULT_SYSTEM_PACKAGES = new String[]{
+            "java.se",
+            "javax.api",
             "javax.accessibility",
             "javax.activation",
             "javax.activity",

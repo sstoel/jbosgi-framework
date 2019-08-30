@@ -918,8 +918,12 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
                     execEnvironments.add("JavaSE-1.6");
                 if (Java.isCompatible(Java.VERSION_1_7))
                     execEnvironments.add("JavaSE-1.7");
-                if (Java.isCompatible(Java.VERSION_1_8));
+                if (Java.isCompatible(Java.VERSION_1_8))
                     execEnvironments.add("JavaSE-1.8");
+                if (Java.isCompatible(Java.VERSION_1_9))
+                    execEnvironments.add("JavaSE-9");
+                if (Java.isCompatible(Java.VERSION_1_11))
+                    execEnvironments.add("JavaSE-11");
 
                 String envlist = execEnvironments.toString();
                 envlist = envlist.substring(1, envlist.length() - 1);

@@ -48,7 +48,9 @@ public abstract class AbstractIntegrationService<T> extends AbstractService<T> i
     public ServiceController<T> install(ServiceTarget serviceTarget, ServiceListener<Object> listener) {
         ServiceBuilder<T> builder = serviceTarget.addService(getServiceName(), this);
         addServiceDependencies(builder);
-        builder.addListener(listener);
+        if (listener != null) {
+            builder.addListener(listener);
+        }
         return builder.install();
     }
 
