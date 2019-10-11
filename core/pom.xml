@@ -34,7 +34,7 @@
     <parent>
         <groupId>org.jboss.osgi.framework</groupId>
         <artifactId>jbosgi-framework-parent</artifactId>
-        <version>6.0.0.Final-SNAPSHOT</version>
+        <version>6.0.0.Final</version>
     </parent>
 
     <name>JBossOSGi Framework Core</name>
@@ -79,6 +79,10 @@
         <dependency>
             <groupId>org.osgi</groupId>
             <artifactId>org.osgi.core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.annotation</artifactId>
         </dependency>
 
         <!-- Provided Dependencies -->

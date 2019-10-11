@@ -27,7 +27,7 @@
     <parent>
         <groupId>org.jboss.osgi</groupId>
         <artifactId>jbosgi-parent</artifactId>
-        <version>4.0.0-SNAPSHOT</version>
+        <version>4.0.0</version>
     </parent>
 
     <name>JBossOSGi Framework</name>
@@ -36,7 +36,7 @@
     <artifactId>jbosgi-framework-parent</artifactId>
     <packaging>pom</packaging>
 
-    <version>6.0.0.Final-SNAPSHOT</version>
+    <version>6.0.0.Final</version>
 
     <!-- Source Control -->
     <scm>
@@ -50,12 +50,12 @@
     <properties>
         <version.aqute.bnd>0.0.365.SP1</version.aqute.bnd>
         <version.javax.inject>1</version.javax.inject>
-        <version.jboss.osgi.deployment>5.0.0.Final-SNAPSHOT</version.jboss.osgi.deployment>
-        <version.jboss.osgi.metadata>7.0.0.Final-SNAPSHOT</version.jboss.osgi.metadata>
-        <version.jboss.osgi.resolver>7.0.0.Final-SNAPSHOT</version.jboss.osgi.resolver>
-        <version.jboss.osgi.spi>7.0.0.Final-SNAPSHOT</version.jboss.osgi.spi>
-        <version.jboss.osgi.testing>5.0.0.Final-SNAPSHOT</version.jboss.osgi.testing>
-        <version.jboss.osgi.vfs>5.0.0.Final-SNAPSHOT</version.jboss.osgi.vfs>
+        <version.jboss.osgi.deployment>5.0.0.Final</version.jboss.osgi.deployment>
+        <version.jboss.osgi.metadata>7.0.0.Final</version.jboss.osgi.metadata>
+        <version.jboss.osgi.resolver>7.0.0.Final</version.jboss.osgi.resolver>
+        <version.jboss.osgi.spi>7.0.0.Final</version.jboss.osgi.spi>
+        <version.jboss.osgi.testing>5.0.0.Final</version.jboss.osgi.testing>
+        <version.jboss.osgi.vfs>5.0.0.Final</version.jboss.osgi.vfs>
 
         <surefire.profiler.args />
         <surefire.system.args>-ea ${surefire.profiler.args}</surefire.system.args>
@@ -77,7 +77,7 @@
             </dependency>
 
             <!-- JBoss OSGi Dependencies -->
-            <dependency>
+	    <dependency>
                 <groupId>org.jboss.osgi.deployment</groupId>
                 <artifactId>jbosgi-deployment</artifactId>
                 <version>${version.jboss.osgi.deployment}</version>

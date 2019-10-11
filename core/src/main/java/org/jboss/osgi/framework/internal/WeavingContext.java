@@ -142,12 +142,14 @@ class WeavingContext {
         private ProtectionDomain protectionDomain;
         private boolean complete;
         private byte[] classfileBuffer;
+        private int state;
 
         ContextClass(String className, Class<?> redefinedClass, ProtectionDomain protectionDomain, byte[] classfileBuffer) {
             this.className = className.replace('/', '.');
             this.redefinedClass = redefinedClass;
             this.protectionDomain = protectionDomain;
             this.classfileBuffer = classfileBuffer;
+            this.state = TRANSFORMING;
         }
 
         @Override
@@ -175,6 +177,7 @@ class WeavingContext {
             if (complete == false) {
                 classfileBuffer = Arrays.copyOf(classfileBuffer, classfileBuffer.length);
                 complete = true;
+                state = TRANSFORMED;
             }
         }
 
@@ -206,6 +209,11 @@ class WeavingContext {
         @Override
         public BundleWiring getBundleWiring() {
             return hostState.adapt(BundleWiring.class);
+        }
+
+        @Override
+        public int getState() {
+            return state;
         }
 
         private void assertNotComplete() {

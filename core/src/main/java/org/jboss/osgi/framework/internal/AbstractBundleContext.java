@@ -54,7 +54,9 @@ import org.osgi.framework.Filter;
 import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.InvalidSyntaxException;
+import org.osgi.framework.ServiceFactory;
 import org.osgi.framework.ServiceListener;
+import org.osgi.framework.ServiceObjects;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.ServiceRegistration;
 import org.osgi.framework.hooks.bundle.FindHook;
@@ -372,6 +374,20 @@ abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implement
     }
 
     @Override
+    @SuppressWarnings({ "unchecked" })
+    public <S> ServiceRegistration<S> registerService(Class<S> clazz, ServiceFactory<S> serviceFactory, Dictionary<String, ?> properties) {
+        if (clazz == null)
+            throw MESSAGES.illegalArgumentNull("class");
+        if (serviceFactory == null)
+            throw MESSAGES.illegalArgumentNull("serviceFactory");
+        asertNotDestroyed();
+        String[] classNames = new String[] { clazz.getName() };
+        ServiceManager serviceManager = getFrameworkState().getServiceManagerPlugin();
+        ServiceState<S> serviceState = serviceManager.registerService(bundleState, classNames, serviceFactory, properties);
+        return serviceState.getRegistration();
+    }
+
+    @Override
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public ServiceReference<?> getServiceReference(String className) {
         if (className == null)
@@ -451,6 +467,11 @@ abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implement
     }
 
     @Override
+    public <S> ServiceObjects<S> getServiceObjects(final ServiceReference<S> serviceReference) {
+        return new ServiceObjectsImpl(serviceReference);
+    }
+
+    @Override
     public boolean ungetService(ServiceReference<?> sref) {
         if (sref == null)
             throw MESSAGES.illegalArgumentNull("sref");
@@ -483,5 +504,29 @@ abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implement
     @Override
     public String toString() {
         return "BundleContext[" + bundleState + "]";
+    }
+
+    class ServiceObjectsImpl<S> implements ServiceObjects<S> {
+        private final ServiceReference<S> m_ref;
+
+        public ServiceObjectsImpl(final ServiceReference<S> ref)
+        {
+            this.m_ref = ref;
+        }
+
+        @Override
+        public S getService() {
+            return AbstractBundleContext.this.getService(m_ref);
+        }
+
+        @Override
+        public void ungetService(final S s) {
+            AbstractBundleContext.this.ungetService(m_ref);
+        }
+
+        @Override
+        public ServiceReference<S> getServiceReference() {
+            return m_ref;
+        }
     }
 }

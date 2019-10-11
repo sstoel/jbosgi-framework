@@ -44,6 +44,7 @@ import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.Version;
 import org.osgi.framework.launch.Framework;
@@ -156,6 +157,14 @@ final class FrameworkProxy implements Framework {
             throw MESSAGES.cannotInitializeFramework(ex);
         } finally {
             firstInit = false;
+        }
+    }
+
+    @Override
+    public void init(final FrameworkListener... frameworkListeners) throws BundleException {
+        init();
+        for (FrameworkListener listener : frameworkListeners) {
+            bundleManager.getFrameworkState().getFrameworkEvents().addFrameworkListener(getSystemBundle(), listener);
         }
     }
 

@@ -44,7 +44,7 @@ public interface SystemPaths {
             "org.jboss.osgi.resolver.spi;version=6.0",
             "org.jboss.osgi.spi;version=6.0",
             "org.jboss.osgi.vfs;version=4.0",
-            "org.osgi.framework;version=1.7",
+            "org.osgi.framework;version=1.8",
             "org.osgi.framework.hooks.bundle;version=1.1",
             "org.osgi.framework.hooks.resolver;version=1.0",
             "org.osgi.framework.hooks.service;version=1.1",

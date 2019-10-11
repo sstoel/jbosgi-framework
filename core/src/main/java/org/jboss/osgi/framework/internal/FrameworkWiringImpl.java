@@ -58,10 +58,12 @@ import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.namespace.HostNamespace;
 import org.osgi.framework.startlevel.BundleStartLevel;
+import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleRevisions;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.framework.wiring.FrameworkWiring;
+import org.osgi.resource.Requirement;
 import org.osgi.resource.Wire;
 import org.osgi.resource.Wiring;
 import org.osgi.service.resolver.ResolutionException;
@@ -285,6 +287,19 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             transitiveDependencyClosure((XBundle) bundle, closure);
         }
         return Collections.unmodifiableCollection(closure);
+    }
+
+    @Override
+    public Collection<BundleCapability> findProviders(final Requirement requirement) {
+        Collection<BundleCapability> result = new HashSet<BundleCapability>();
+
+        for (XBundle bundle : bundleManager.getBundles(null)) {
+            XBundleRevision xres = bundle.getBundleRevision();
+            List<BundleCapability> bcaps = xres.getDeclaredCapabilities(requirement.getNamespace());
+            result.addAll(bcaps);
+        }
+
+        return result;
     }
 
     private void transitiveDependencyClosure(XBundle bundle, Set<Bundle> closure) {
