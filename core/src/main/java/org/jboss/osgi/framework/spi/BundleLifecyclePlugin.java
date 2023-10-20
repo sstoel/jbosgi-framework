@@ -50,7 +50,7 @@ public class BundleLifecyclePlugin extends AbstractIntegrationService<BundleLife
     protected void addServiceDependencies(ServiceBuilder<BundleLifecycle> builder) {
         builder.addDependency(IntegrationServices.LOCK_MANAGER_PLUGIN, LockManager.class, injectedLockManager);
         builder.addDependency(Services.BUNDLE_MANAGER, BundleManager.class, injectedBundleManager);
-        builder.addDependency(Services.FRAMEWORK_CREATE);
+        builder.requires(Services.FRAMEWORK_CREATE);
         builder.setInitialMode(Mode.ON_DEMAND);
     }
 

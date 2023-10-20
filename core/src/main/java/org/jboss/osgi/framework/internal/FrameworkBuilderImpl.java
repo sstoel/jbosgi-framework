@@ -32,9 +32,9 @@ import java.util.concurrent.TimeUnit;
 import org.jboss.modules.Module;
 import org.jboss.modules.log.JDKModuleLogger;
 import org.jboss.modules.log.ModuleLogger;
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceContainer;
 import org.jboss.msc.service.ServiceController.Mode;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceTarget;
 import org.jboss.osgi.framework.spi.AbstractResolverPlugin;
@@ -120,7 +120,7 @@ public final class FrameworkBuilderImpl implements FrameworkBuilder {
         if (maxThreads == null)
             maxThreads = SecurityActions.getSystemProperty(PROPERTY_FRAMEWORK_BOOTSTRAP_THREADS, null);
         if (maxThreads != null) {
-            return ServiceContainer.Factory.create(new Integer("" + maxThreads), 30L, TimeUnit.SECONDS);
+            return ServiceContainer.Factory.create(Integer.parseInt("" + maxThreads), 30L, TimeUnit.SECONDS);
         } else {
             return ServiceContainer.Factory.create();
         }
@@ -215,7 +215,7 @@ public final class FrameworkBuilderImpl implements FrameworkBuilder {
     }
 
     @Override
-    public void installServices(FrameworkPhase phase, ServiceTarget serviceTarget, ServiceListener<Object> listener) {
+    public void installServices(FrameworkPhase phase, ServiceTarget serviceTarget, LifecycleListener listener) {
         assertNotClosed();
         Map<ServiceName, IntegrationService<?>> phaseServices = integrationServices.get(phase);
         for (IntegrationService<?> service : phaseServices.values()) {

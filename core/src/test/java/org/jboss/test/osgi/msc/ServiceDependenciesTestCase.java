@@ -21,11 +21,14 @@ package org.jboss.test.osgi.msc;
  * #L%
  */
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.jboss.msc.service.LifecycleEvent;
+import org.jboss.msc.service.LifecycleListener;
 import org.junit.Assert;
 
-import org.jboss.msc.service.AbstractServiceListener;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceController.Mode;
@@ -56,7 +59,7 @@ public class ServiceDependenciesTestCase extends AbstractServiceTestCase {
 
         ServiceName snameB = ServiceName.of("serviceB");
         ServiceBuilder<String> builderB = serviceTarget.addService(snameB, new ServiceB());
-        builderB.addDependency(snameA);
+        builderB.requires(snameA);
         ServiceController<String> controllerB = builderB.install();
 
         new FutureServiceValue<String>(controllerB).get();
@@ -84,7 +87,7 @@ public class ServiceDependenciesTestCase extends AbstractServiceTestCase {
 
         ServiceName snameB = ServiceName.of("serviceB");
         ServiceBuilder<String> builderB = serviceTarget.addService(snameB, new ServiceB());
-        builderB.addDependency(snameA);
+        builderB.requires(snameA);
         ServiceController<String> controllerB = builderB.install();
 
         new FutureServiceValue<String>(controllerB).get();
@@ -120,7 +123,7 @@ public class ServiceDependenciesTestCase extends AbstractServiceTestCase {
 
         ServiceName snameB = ServiceName.of("serviceB");
         ServiceBuilder<String> builderB = serviceTarget.addService(snameB, new ServiceB());
-        builderB.addDependency(snameA);
+        builderB.requires(snameA);
         ServiceController<String> controllerB = builderB.install();
 
         new FutureServiceValue<String>(controllerB).get();
@@ -156,7 +159,7 @@ public class ServiceDependenciesTestCase extends AbstractServiceTestCase {
 
         ServiceName snameB = ServiceName.of("serviceB");
         ServiceBuilder<String> builderB = serviceTarget.addService(snameB, new ServiceB());
-        builderB.addDependency(snameA);
+        builderB.requires(snameA);
         ServiceController<String> controllerB = builderB.install();
 
         new FutureServiceValue<String>(controllerB).get();
@@ -184,14 +187,21 @@ public class ServiceDependenciesTestCase extends AbstractServiceTestCase {
         builderA.setInitialMode(Mode.ON_DEMAND);
         ServiceController<String> controllerA = builderA.install();
 
+        final Set<ServiceName> addedNames = new HashSet<ServiceName>();
+
         final AtomicBoolean listenerCalled = new AtomicBoolean();
-        controllerA.addListener(new AbstractServiceListener<String>() {
-            public void transition(final ServiceController<? extends String> controller, final ServiceController.Transition transition) {
-                switch (transition) {
-                    case STARTING_to_START_FAILED:
-                    case STOPPING_to_DOWN:
-                        controller.removeListener(this);
-                        listenerCalled.set(true);
+        controllerA.addListener(new LifecycleListener() {
+            @Override
+            public void handleEvent(final ServiceController<?> controller, final LifecycleEvent event) {
+                switch (event) {
+                    case FAILED:
+                    case DOWN:
+                        if (addedNames.contains(controller.getName())) {
+                            controller.removeListener(this);
+                            listenerCalled.set(true);
+                        } else {
+                            addedNames.add(controller.getName());
+                        }
                         break;
                 }
             }
@@ -199,7 +209,7 @@ public class ServiceDependenciesTestCase extends AbstractServiceTestCase {
 
         ServiceName snameB = ServiceName.of("serviceB");
         ServiceBuilder<String> builderB = serviceTarget.addService(snameB, new ServiceB());
-        builderB.addDependency(snameA);
+        builderB.requires(snameA);
         ServiceController<String> controllerB = builderB.install();
 
         new FutureServiceValue<String>(controllerB).get();

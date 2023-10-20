@@ -21,8 +21,8 @@
  */
 package org.jboss.osgi.framework.spi;
 
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceController;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceTarget;
 import org.jboss.msc.service.StartContext;
@@ -32,7 +32,7 @@ public abstract class BootstrapBundlesService<T> extends AbstractIntegrationServ
 
     private final ServiceName baseName;
     private final IntegrationServices.BootstrapPhase phase;
-    private ServiceListener<Object> listener;
+    private LifecycleListener listener;
 
     public BootstrapBundlesService(ServiceName baseName, IntegrationServices.BootstrapPhase phase) {
         super(IntegrationServices.BootstrapPhase.serviceName(baseName, phase));
@@ -41,12 +41,12 @@ public abstract class BootstrapBundlesService<T> extends AbstractIntegrationServ
     }
 
     @Override
-    public ServiceController<T> install(ServiceTarget serviceTarget, ServiceListener<Object> listener) {
+    public ServiceController<T> install(ServiceTarget serviceTarget, LifecycleListener listener) {
         this.listener = listener;
         return super.install(serviceTarget, listener);
     }
 
-    protected ServiceListener<Object> getServiceListener() {
+    protected LifecycleListener getServiceListener() {
         return listener;
     }
 

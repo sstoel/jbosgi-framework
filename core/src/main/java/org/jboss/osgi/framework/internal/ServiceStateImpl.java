@@ -98,6 +98,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
 
         properties.put(Constants.SERVICE_ID, serviceId);
         properties.put(Constants.OBJECTCLASS, classNames);
+        properties.put(Constants.SERVICE_BUNDLEID, owner.getBundleId());
         this.currProperties = new CaseInsensitiveDictionary(properties);
 
         // Create the {@link ServiceRegistration} and {@link ServiceReference}
@@ -235,6 +236,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
 
         properties.put(Constants.SERVICE_ID, currProperties.get(Constants.SERVICE_ID));
         properties.put(Constants.OBJECTCLASS, currProperties.get(Constants.OBJECTCLASS));
+        properties.put(Constants.SERVICE_BUNDLEID, currProperties.get(Constants.SERVICE_BUNDLEID));
         currProperties = new CaseInsensitiveDictionary(properties);
 
         // This event is synchronously delivered after the service properties have been modified.

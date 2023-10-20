@@ -62,7 +62,7 @@ final class PersistentBundlesInstallPlugin extends BootstrapBundlesInstall<Void>
         super.addServiceDependencies(builder);
         builder.addDependency(IntegrationServices.STORAGE_MANAGER_PLUGIN, StorageManager.class, injectedStoragePlugin);
         builder.addDependency(IntegrationServices.DEPLOYMENT_PROVIDER_PLUGIN, DeploymentProvider.class, injectedDeploymentFactory);
-        builder.addDependencies(IntegrationServices.BOOTSTRAP_BUNDLES_COMPLETE);
+        builder.requires(IntegrationServices.BOOTSTRAP_BUNDLES_COMPLETE);
     }
 
     @Override

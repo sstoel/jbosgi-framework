@@ -30,12 +30,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import org.jboss.modules.Module;
 import org.jboss.modules.ModuleIdentifier;
 import org.jboss.modules.ModuleLoadException;
 import org.jboss.modules.ModuleLoader;
 import org.jboss.modules.ModuleSpec;
+import org.jboss.msc.service.Service;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceController.Mode;
@@ -43,8 +45,8 @@ import org.jboss.msc.service.ServiceController.State;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceRegistry;
 import org.jboss.msc.service.ServiceTarget;
-import org.jboss.msc.service.ValueService;
-import org.jboss.msc.value.ImmediateValue;
+import org.jboss.msc.service.StartContext;
+import org.jboss.msc.service.StopContext;
 import org.jboss.osgi.framework.spi.FrameworkModuleLoader;
 import org.jboss.osgi.framework.spi.FutureServiceValue;
 import org.jboss.osgi.framework.spi.IntegrationConstants;
@@ -180,15 +182,43 @@ public final class FrameworkModuleLoaderImpl extends ModuleLoader implements Fra
         }
         try {
             Module module = loadModule(identifier);
-            ValueService<Module> service = new ValueService<Module>(new ImmediateValue<Module>(module));
+
             ServiceTarget serviceTarget = UserBundleRevision.assertBundleRevision(brev).getServiceTarget();
-            ServiceBuilder<Module> builder = serviceTarget.addService(moduleServiceName, service);
-            builder.setInitialMode(Mode.ON_DEMAND);
-            builder.install();
+
+            final ServiceBuilder sb = serviceTarget.addService(moduleServiceName);
+            final Consumer<Module> moduleConsumer = sb.provides(moduleServiceName);
+
+            sb.setInitialMode(Mode.ON_DEMAND);
+            sb.setInstance(new ModuleService(moduleConsumer, module));
+            sb.install();
         } catch (ModuleLoadException ex) {
             throw MESSAGES.illegalStateCannotLoadModule(ex, identifier);
         }
         return moduleServiceName;
+    }
+
+    private static final class ModuleService implements Service {
+        private final Consumer<Module> moduleConsumer;
+        private final Module module;
+
+        private ModuleService(final Consumer<Module> moduleConsumer, final Module module) {
+            this.moduleConsumer = moduleConsumer;
+            this.module = module;
+        }
+        @Override
+        public void start(final StartContext startContext) {
+            moduleConsumer.accept(module);
+        }
+
+        @Override
+        public void stop(final StopContext stopContext) {
+            moduleConsumer.accept(null);
+        }
+
+        @Override
+        public Object getValue() {
+            return module;
+        }
     }
 
     @Override

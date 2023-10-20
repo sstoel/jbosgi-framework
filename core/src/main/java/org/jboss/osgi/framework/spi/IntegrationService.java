@@ -21,9 +21,9 @@
  */
 package org.jboss.osgi.framework.spi;
 
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.Service;
 import org.jboss.msc.service.ServiceController;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceTarget;
 
@@ -37,6 +37,6 @@ public interface IntegrationService<T> extends Service<T> {
 
     ServiceName getServiceName();
 
-    ServiceController<T> install(ServiceTarget serviceTarget, ServiceListener<Object> listener);
+    ServiceController<T> install(ServiceTarget serviceTarget, LifecycleListener listener);
 
 }

@@ -21,10 +21,10 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
-import org.jboss.msc.service.ServiceController.Mode;
-import org.jboss.msc.service.ServiceListener;
+import org.jboss.msc.service.ServiceController.Mode;;
 import org.jboss.msc.service.ServiceTarget;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
@@ -67,7 +67,7 @@ public final class FrameworkCreate extends AbstractFrameworkService {
     }
 
     @Override
-    public ServiceController<FrameworkState> install(ServiceTarget serviceTarget, ServiceListener<Object> listener) {
+    public ServiceController<FrameworkState> install(ServiceTarget serviceTarget, LifecycleListener listener) {
         ServiceController<FrameworkState> controller = super.install(serviceTarget, listener);
         new FrameworkCreated().install(serviceTarget, listener);
         return controller;
@@ -116,7 +116,7 @@ public final class FrameworkCreate extends AbstractFrameworkService {
         @Override
         protected void addServiceDependencies(ServiceBuilder<BundleContext> builder) {
             builder.addDependency(IntegrationServices.SYSTEM_CONTEXT_INTERNAL, BundleContext.class, injectedBundleContext);
-            builder.addDependency(IntegrationServices.FRAMEWORK_CREATE_INTERNAL);
+            builder.requires(IntegrationServices.FRAMEWORK_CREATE_INTERNAL);
             builder.setInitialMode(initialMode);
         }
 

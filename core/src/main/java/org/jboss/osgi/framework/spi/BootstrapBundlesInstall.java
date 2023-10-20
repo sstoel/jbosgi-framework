@@ -58,7 +58,7 @@ public class BootstrapBundlesInstall<T> extends BootstrapBundlesService<T> {
     protected void addServiceDependencies(ServiceBuilder<T> builder) {
         builder.addDependency(Services.BUNDLE_MANAGER, BundleManager.class, injectedBundleManager);
         builder.addDependency(Services.FRAMEWORK_CREATE, BundleContext.class, injectedBundleContext);
-        builder.addDependency(IntegrationServices.FRAMEWORK_CORE_SERVICES);
+        builder.requires(IntegrationServices.FRAMEWORK_CORE_SERVICES);
         builder.setInitialMode(Mode.ON_DEMAND);
     }
 

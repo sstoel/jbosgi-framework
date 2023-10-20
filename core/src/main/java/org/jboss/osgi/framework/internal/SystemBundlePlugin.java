@@ -197,11 +197,44 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
             if (Java.isCompatible(Java.VERSION_1_8)) {
                 vlist += ",1.8";
             }
-            if (Java.isCompatible(Java.VERSION_1_9)) {
+            if (Java.isCompatible(Java.VERSION_9)) {
                 vlist += ",9";
             }
-            if (Java.isCompatible(Java.VERSION_1_11)) {
+            if (Java.isCompatible(Java.VERSION_10)) {
+                vlist += ",10";
+            }
+            if (Java.isCompatible(Java.VERSION_11)) {
                 vlist += ",11";
+            }
+            if (Java.isCompatible(Java.VERSION_12)) {
+                vlist += ",12";
+            }
+            if (Java.isCompatible(Java.VERSION_13)) {
+                vlist += ",13";
+            }
+            if (Java.isCompatible(Java.VERSION_14)) {
+                vlist += ",14";
+            }
+            if (Java.isCompatible(Java.VERSION_15)) {
+                vlist += ",15";
+            }
+            if (Java.isCompatible(Java.VERSION_16)) {
+                vlist += ",16";
+            }
+            if (Java.isCompatible(Java.VERSION_17)) {
+                vlist += ",17";
+            }
+            if (Java.isCompatible(Java.VERSION_18)) {
+                vlist += ",18";
+            }
+            if (Java.isCompatible(Java.VERSION_19)) {
+                vlist += ",19";
+            }
+            if (Java.isCompatible(Java.VERSION_20)) {
+                vlist += ",20";
+            }
+            if (Java.isCompatible(Java.VERSION_21)) {
+                vlist += ",21";
             }
             capspec += vlist.substring(1) + "\"";
             builder.addProvidedCapabilities(capspec);

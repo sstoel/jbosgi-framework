@@ -23,9 +23,9 @@ package org.jboss.osgi.framework.spi;
 
 import java.util.Map;
 
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceContainer;
 import org.jboss.msc.service.ServiceController.Mode;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceTarget;
 import org.osgi.framework.launch.Framework;
 
@@ -67,5 +67,5 @@ public interface FrameworkBuilder {
 
     void registerIntegrationService(FrameworkPhase phase, IntegrationService<?> service);
 
-    void installServices(FrameworkPhase phase, ServiceTarget serviceTarget, ServiceListener<Object> listener);
+    void installServices(FrameworkPhase phase, ServiceTarget serviceTarget, LifecycleListener listener);
 }

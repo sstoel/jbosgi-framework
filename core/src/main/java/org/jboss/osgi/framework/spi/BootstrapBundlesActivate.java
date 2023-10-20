@@ -50,7 +50,7 @@ public class BootstrapBundlesActivate<T> extends BootstrapBundlesService<T> {
 
     @Override
     protected void addServiceDependencies(ServiceBuilder<T> builder) {
-        builder.addDependencies(getPreviousService());
+        builder.requires(getPreviousService());
     }
 
     @Override

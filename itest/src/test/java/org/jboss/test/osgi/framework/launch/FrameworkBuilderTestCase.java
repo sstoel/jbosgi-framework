@@ -24,17 +24,20 @@ package org.jboss.test.osgi.framework.launch;
 import java.io.InputStream;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
+import org.jboss.modules.Module;
+import org.jboss.msc.service.LifecycleListener;
+import org.jboss.msc.service.Service;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceContainer;
 import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceController.Mode;
 import org.jboss.msc.service.ServiceController.State;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceTarget;
-import org.jboss.msc.service.ValueService;
-import org.jboss.msc.value.ImmediateValue;
+import org.jboss.msc.service.StartContext;
+import org.jboss.msc.service.StopContext;
 import org.jboss.osgi.framework.Constants;
 import org.jboss.osgi.framework.Services;
 import org.jboss.osgi.framework.spi.FrameworkBuilder;
@@ -155,8 +158,8 @@ public class FrameworkBuilderTestCase extends AbstractFrameworkLaunchTest {
         ServiceContainer serviceContainer = builder.createServiceContainer();
         ServiceTarget serviceTarget = serviceContainer.subTarget();
         builder.createFrameworkServices(serviceContainer, true);
-        builder.installServices(FrameworkPhase.CREATE, serviceTarget, Mockito.mock(ServiceListener.class));
-        builder.installServices(FrameworkPhase.INIT, serviceTarget, Mockito.mock(ServiceListener.class));
+        builder.installServices(FrameworkPhase.CREATE, serviceTarget, Mockito.mock(LifecycleListener.class));
+        builder.installServices(FrameworkPhase.INIT, serviceTarget, Mockito.mock(LifecycleListener.class));
 
         assertServiceState(serviceContainer, State.DOWN, Services.FRAMEWORK_INIT);
         assertServiceState(serviceContainer, State.DOWN, IntegrationServices.BOOTSTRAP_BUNDLES_INSTALL);
@@ -165,12 +168,15 @@ public class FrameworkBuilderTestCase extends AbstractFrameworkLaunchTest {
 
         // Register a service that has a dependency on {@link FrameworkActive}
         ServiceName serviceName = ServiceName.parse("someService");
-        ValueService<Boolean> service = new ValueService<Boolean>(new ImmediateValue<Boolean>(true));
-        ServiceBuilder<Boolean> serviceBuilder = serviceTarget.addService(serviceName, service);
-        serviceBuilder.addDependencies(Services.FRAMEWORK_ACTIVE);
+
+        final ServiceBuilder serviceBuilder = serviceTarget.addService(serviceName);
+        final Consumer<Boolean> moduleConsumer = serviceBuilder.provides(serviceName);
+
+        serviceBuilder.requires(Services.FRAMEWORK_ACTIVE);
+        serviceBuilder.setInstance(new BooleanService(moduleConsumer, true));
         ServiceController<Boolean> controller = serviceBuilder.install();
 
-        builder.installServices(FrameworkPhase.ACTIVE, serviceTarget, Mockito.mock(ServiceListener.class));
+        builder.installServices(FrameworkPhase.ACTIVE, serviceTarget, Mockito.mock(LifecycleListener.class));
         FutureServiceValue<Boolean> future = new FutureServiceValue<Boolean>(controller);
         Assert.assertTrue(future.get(2, TimeUnit.SECONDS));
 
@@ -190,6 +196,30 @@ public class FrameworkBuilderTestCase extends AbstractFrameworkLaunchTest {
         assertServiceState(serviceContainer, State.UP, IntegrationServices.BOOTSTRAP_BUNDLES_COMPLETE);
         assertServiceState(serviceContainer, State.UP, IntegrationServices.PERSISTENT_BUNDLES_COMPLETE);
         assertServiceState(serviceContainer, State.UP, Services.FRAMEWORK_ACTIVE);
+    }
+
+    private static final class BooleanService implements Service {
+        private final Consumer<Boolean> moduleConsumer;
+        private final Boolean module;
+
+        private BooleanService(final Consumer<Boolean> moduleConsumer, final Boolean module) {
+            this.moduleConsumer = moduleConsumer;
+            this.module = module;
+        }
+        @Override
+        public void start(final StartContext startContext) {
+            moduleConsumer.accept(module);
+        }
+
+        @Override
+        public void stop(final StopContext stopContext) {
+            moduleConsumer.accept(null);
+        }
+
+        @Override
+        public Object getValue() {
+            return module;
+        }
     }
 
     private static JavaArchive getBundleA() {

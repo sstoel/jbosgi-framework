@@ -69,7 +69,7 @@ public class BootstrapBundlesResolve<T> extends BootstrapBundlesService<T> {
         builder.addDependency(IntegrationServices.FRAMEWORK_WIRING_PLUGIN, FrameworkWiring.class, injectedFrameworkWiring);
         builder.addDependency(Services.BUNDLE_MANAGER, BundleManager.class, injectedBundleManager);
         builder.addDependency(Services.ENVIRONMENT, XEnvironment.class, injectedEnvironment);
-        builder.addDependencies(getPreviousService());
+        builder.requires(getPreviousService());
     }
 
     protected BundleManager getBundleManager() {

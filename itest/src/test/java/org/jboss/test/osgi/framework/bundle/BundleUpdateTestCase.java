@@ -55,6 +55,7 @@ import org.jboss.test.osgi.framework.fragments.fragA.FragBeanA;
 import org.jboss.test.osgi.framework.fragments.hostA.HostAActivator;
 import org.jboss.test.osgi.framework.fragments.subA.SubBeanA;
 import org.junit.Test;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleActivator;
@@ -251,8 +252,8 @@ public class BundleUpdateTestCase extends OSGiFrameworkTest {
 
             InputStream ismock = mock(InputStream.class);
             when(ismock.read()).thenThrow(new IOException());
-            when(ismock.read((byte[]) Mockito.anyObject())).thenThrow(new IOException());
-            when(ismock.read((byte[]) Mockito.anyObject(), Mockito.anyInt(), Mockito.anyInt())).thenThrow(new IOException());
+            when(ismock.read((byte[]) Mockito.any())).thenThrow(new IOException());
+            when(ismock.read((byte[]) Mockito.any(), Mockito.anyInt(), Mockito.anyInt())).thenThrow(new IOException());
 
             try {
                 bundle.update(ismock);

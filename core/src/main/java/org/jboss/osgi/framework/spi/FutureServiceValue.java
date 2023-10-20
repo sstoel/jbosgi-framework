@@ -22,6 +22,10 @@ package org.jboss.osgi.framework.spi;
  * #L%
  */
 
+import static org.jboss.msc.service.LifecycleEvent.DOWN;
+import static org.jboss.msc.service.LifecycleEvent.FAILED;
+import static org.jboss.msc.service.LifecycleEvent.REMOVED;
+import static org.jboss.msc.service.LifecycleEvent.UP;
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
@@ -31,11 +35,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import org.jboss.msc.service.AbstractServiceListener;
+import org.jboss.msc.service.LifecycleEvent;
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceController;
-import org.jboss.msc.service.ServiceController.State;
-import org.jboss.msc.service.ServiceController.Substate;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.StartException;
 
 /**
@@ -49,13 +51,13 @@ import org.jboss.msc.service.StartException;
 public final class FutureServiceValue<T> implements Future<T> {
 
     private final ServiceController<T> controller;
-    private final State expectedState;
+    private final ServiceController.State expectedState;
 
     public FutureServiceValue(ServiceController<T> controller) {
-        this(controller, State.UP);
+        this(controller, ServiceController.State.UP);
     }
 
-    public FutureServiceValue(ServiceController<T> controller, State state) {
+    public FutureServiceValue(ServiceController<T> controller, ServiceController.State state) {
         if (controller == null)
             throw MESSAGES.illegalArgumentNull("controller");
         if (state == null)
@@ -96,45 +98,37 @@ public final class FutureServiceValue<T> implements Future<T> {
     private T getValue(long timeout, TimeUnit unit) throws ExecutionException, TimeoutException {
 
         if (controller.getState() == expectedState) {
-            return State.UP == expectedState ? controller.getValue() : null;
+            return ServiceController.State.UP == expectedState ? controller.getValue() : null;
         }
 
         final CountDownLatch latch = new CountDownLatch(1);
         final FutureServiceValue<T> futureServiceValue = this;
         final String serviceName = controller.getName().getCanonicalName();
-        ServiceListener<T> listener = new AbstractServiceListener<T>() {
+        LifecycleListener listener = new LifecycleListener() {
 
             @Override
-            public void listenerAdded(ServiceController<? extends T> controller) {
-                State state = controller.getState();
-                if (state == expectedState || state == State.START_FAILED)
-                    listenerDone(controller);
-            }
-
-            @Override
-            public void transition(final ServiceController<? extends T> controller, final ServiceController.Transition transition) {
-                LOGGER.tracef("transition %s %s => %s", futureServiceValue, serviceName, transition);
-                Substate targetState = transition.getAfter();
+            public void handleEvent(final ServiceController<?> controller, final LifecycleEvent event) {
+                LOGGER.tracef("transition %s %s => %s", futureServiceValue, serviceName, event);
                 switch (expectedState) {
                     case UP:
-                        if (targetState == Substate.UP || targetState == Substate.START_FAILED) {
+                        if (event == UP || event == FAILED) {
                             listenerDone(controller);
                         }
                         break;
                     case DOWN:
-                        if (targetState == Substate.DOWN) {
+                        if (event == DOWN) {
                             listenerDone(controller);
                         }
                         break;
                     case REMOVED:
-                        if (targetState == Substate.REMOVED) {
+                        if (event == REMOVED) {
                             listenerDone(controller);
                         }
-                        break;
+
                 }
             }
 
-            private void listenerDone(ServiceController<? extends T> controller) {
+            private void listenerDone(ServiceController<?> controller) {
                 latch.countDown();
             }
         };
@@ -152,7 +146,7 @@ public final class FutureServiceValue<T> implements Future<T> {
         }
 
         if (controller.getState() == expectedState)
-            return expectedState == State.UP ? controller.getValue() : null;
+            return expectedState == ServiceController.State.UP ? controller.getValue() : null;
 
         Throwable cause = controller.getStartException();
         while (cause instanceof StartException && cause.getCause() != null) {

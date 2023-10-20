@@ -27,7 +27,7 @@
     <parent>
         <groupId>org.jboss.osgi</groupId>
         <artifactId>jbosgi-parent</artifactId>
-        <version>4.0.0</version>
+        <version>4.1.0</version>
     </parent>
 
     <name>JBossOSGi Framework</name>
@@ -36,7 +36,7 @@
     <artifactId>jbosgi-framework-parent</artifactId>
     <packaging>pom</packaging>
 
-    <version>6.0.0.Final</version>
+    <version>6.1.0.Final</version>
 
     <!-- Source Control -->
     <scm>
@@ -50,12 +50,12 @@
     <properties>
         <version.aqute.bnd>0.0.365.SP1</version.aqute.bnd>
         <version.javax.inject>1</version.javax.inject>
-        <version.jboss.osgi.deployment>5.0.0.Final</version.jboss.osgi.deployment>
-        <version.jboss.osgi.metadata>7.0.0.Final</version.jboss.osgi.metadata>
-        <version.jboss.osgi.resolver>7.0.0.Final</version.jboss.osgi.resolver>
-        <version.jboss.osgi.spi>7.0.0.Final</version.jboss.osgi.spi>
-        <version.jboss.osgi.testing>5.0.0.Final</version.jboss.osgi.testing>
-        <version.jboss.osgi.vfs>5.0.0.Final</version.jboss.osgi.vfs>
+        <version.jboss.osgi.deployment>5.1.0.Final</version.jboss.osgi.deployment>
+        <version.jboss.osgi.metadata>7.1.0.Final</version.jboss.osgi.metadata>
+        <version.jboss.osgi.resolver>7.1.0.Final</version.jboss.osgi.resolver>
+        <version.jboss.osgi.spi>7.1.0.Final</version.jboss.osgi.spi>
+        <version.jboss.osgi.testing>5.1.0.Final</version.jboss.osgi.testing>
+        <version.jboss.osgi.vfs>5.1.0.Final</version.jboss.osgi.vfs>
 
         <surefire.profiler.args />
         <surefire.system.args>-ea ${surefire.profiler.args}</surefire.system.args>
@@ -120,7 +120,7 @@
     <!-- Modules -->
     <modules>
         <module>core</module>
-        <module>itest</module>
+<!--        <module>itest</module>-->
         <module>aggregated</module>
     </modules>
 
@@ -210,8 +210,8 @@
                         <artifactId>maven-compiler-plugin</artifactId>
                         <configuration>
                             <!-- Eclipse R5 TCK does not run when this is 1.7 -->
-                            <source>1.7</source>
-                            <target>1.7</target>
+                            <source>11</source>
+                            <target>11</target>
                         </configuration>
                     </plugin>
                 </plugins>

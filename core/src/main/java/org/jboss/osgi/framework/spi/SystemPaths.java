@@ -44,7 +44,9 @@ public interface SystemPaths {
             "org.jboss.osgi.resolver.spi;version=6.0",
             "org.jboss.osgi.spi;version=6.0",
             "org.jboss.osgi.vfs;version=4.0",
+            "org.osgi.dto;version=1.0",
             "org.osgi.framework;version=1.8",
+            "org.osgi.framework.dto;version=1.8",
             "org.osgi.framework.hooks.bundle;version=1.1",
             "org.osgi.framework.hooks.resolver;version=1.0",
             "org.osgi.framework.hooks.service;version=1.1",
@@ -52,7 +54,7 @@ public interface SystemPaths {
             "org.osgi.framework.launch;version=1.1",
             "org.osgi.framework.namespace;version=1.0",
             "org.osgi.framework.startlevel;version=1.0",
-            "org.osgi.framework.wiring;version=1.1",
+            "org.osgi.framework.wiring;version=1.2",
         	"org.osgi.resource;version=1.0",
             "org.osgi.service.condpermadmin ;version=1.1",
             "org.osgi.service.packageadmin;version=1.2",
@@ -60,6 +62,7 @@ public interface SystemPaths {
             "org.osgi.service.resolver;version=1.0",
             "org.osgi.service.startlevel;version=1.1",
             "org.osgi.service.url;version=1.0",
+            "org.osgi.util.promise;version=1.0",
             "org.osgi.util.tracker;version=1.5",
             "org.osgi.util.xml;version=1.0"
     };

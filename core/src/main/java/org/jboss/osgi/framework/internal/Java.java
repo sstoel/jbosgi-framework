@@ -61,9 +61,19 @@ public final class Java {
     public static final int VERSION_1_6 = 0x07;
     public static final int VERSION_1_7 = 0x08;
     public static final int VERSION_1_8 = 0x09;
-    public static final int VERSION_1_9 = 0x0A;
-    public static final int VERSION_1_10 = 0x0B;
-    public static final int VERSION_1_11 = 0x0C;
+    public static final int VERSION_9 = 0x0A;
+    public static final int VERSION_10 = 0x0B;
+    public static final int VERSION_11 = 0x0C;
+    public static final int VERSION_12 = 0x0D;
+    public static final int VERSION_13 = 0x0E;
+    public static final int VERSION_14 = 0x0F;
+    public static final int VERSION_15 = 0x10;
+    public static final int VERSION_16 = 0x11;
+    public static final int VERSION_17 = 0x12;
+    public static final int VERSION_18 = 0x13;
+    public static final int VERSION_19 = 0x14;
+    public static final int VERSION_20 = 0x15;
+    public static final int VERSION_21 = 0x16;
 
     /**
      * Private to avoid over optimization by the compiler.
@@ -112,15 +122,23 @@ public final class Java {
 
             // check for 1.9
             Class.forName("java.lang.ProcessHandle");
-            version = VERSION_1_9;
+            version = VERSION_9;
 
 //            // check for 1.10
 //            Class.forName("java.util.stream.Collectors");
 //            version = VERSION_1_10;
 
-            // check for 1.11
+            // check for 11
             Class.forName("java.lang.invoke.ConstantBootstraps");
-            version = VERSION_1_11;
+            version = VERSION_11;
+
+            // check for 17
+            Class.forName("java.lang.invoke.ConstantBootstraps");
+            version = VERSION_17;
+
+            // check for 21
+            Class.forName("java.util.concurrent.ThreadPerTaskExecutor");
+            version = VERSION_21;
         } catch (ClassNotFoundException ignore) {
         }
         VERSION = version;

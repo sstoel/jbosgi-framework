@@ -24,16 +24,18 @@ package org.jboss.test.osgi.msc;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.jboss.msc.service.LifecycleEvent;
+import org.jboss.msc.service.LifecycleListener;
 import org.junit.Assert;
 
-import org.jboss.msc.service.AbstractServiceListener;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceController.Mode;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
@@ -53,14 +55,10 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
     public void testImmediateCallToListenerAdded() throws Exception {
 
         final AtomicBoolean listenerAdded = new AtomicBoolean();
-        ServiceListener<Object> listener = new AbstractServiceListener<Object>() {
-            @Override
-            public void listenerAdded(ServiceController<? extends Object> controller) {
-                listenerAdded.set(true);
-            }
-        };
+        LifecycleListener listener = (controller, event) -> {};
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
         builder.addListener(listener);
+        listenerAdded.set(true);
         builder.install();
 
         Assert.assertTrue("Listener added", listenerAdded.get());
@@ -69,7 +67,7 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
     @Test
     public void testSimpleTracker() throws Exception {
 
-        ServiceTracker<Object> tracker = new ServiceTracker<Object>();
+        ServiceTracker tracker = new ServiceTracker();
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
         builder.addListener(tracker);
         builder.install();
@@ -87,7 +85,7 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
         }
 
         final Set<ServiceName> names = new HashSet<ServiceName>();
-        ServiceTracker<Object> tracker = new ServiceTracker<Object>() {
+        ServiceTracker tracker = new ServiceTracker() {
 
             @Override
             protected boolean allServicesAdded(Set<ServiceName> trackedServices) {
@@ -116,9 +114,9 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
     @Test
     public void testDependencyFailed() throws Exception {
 
-        ServiceTracker<Object> tracker = new ServiceTracker<Object>();
+        ServiceTracker tracker = new ServiceTracker();
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
-        builder.addDependency(ServiceName.of("serviceB"));
+        builder.requires(ServiceName.of("serviceB"));
         builder.addListener(tracker);
         builder.install();
 
@@ -140,9 +138,9 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
     @Ignore
     public void testUntrackedDependencyFailed() throws Exception {
 
-        ServiceTracker<Object> tracker = new ServiceTracker<Object>();
+        ServiceTracker tracker = new ServiceTracker();
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
-        builder.addDependency(ServiceName.of("serviceB"));
+        builder.requires(ServiceName.of("serviceB"));
         builder.addListener(tracker);
         builder.install();
 
@@ -162,10 +160,11 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
     @Test
     public void testTransitionToNever() throws Exception {
 
-        ServiceTracker<Object> tracker = new ServiceTracker<Object>();
+        ServiceTracker tracker = new ServiceTracker();
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
         builder.addListener(tracker);
         ServiceController<String> controller = builder.install();
+       // tracker.handleEvent(controller, LifecycleEvent.DOWN);
 
         controller.setMode(Mode.NEVER);
 

@@ -21,16 +21,17 @@
  */
 package org.jboss.osgi.framework.spi;
 
-import org.jboss.msc.service.AbstractService;
+import org.jboss.msc.service.Service;
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceTarget;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
+import org.jboss.msc.service.StopContext;
 
-public abstract class AbstractIntegrationService<T> extends AbstractService<T> implements IntegrationService<T> {
+public abstract class AbstractIntegrationService<T> implements Service<T>, IntegrationService<T> {
 
     private final ServiceName serviceName;
     private T serviceValue;
@@ -45,7 +46,7 @@ public abstract class AbstractIntegrationService<T> extends AbstractService<T> i
     }
 
     @Override
-    public ServiceController<T> install(ServiceTarget serviceTarget, ServiceListener<Object> listener) {
+    public ServiceController<T> install(ServiceTarget serviceTarget, LifecycleListener listener) {
         ServiceBuilder<T> builder = serviceTarget.addService(getServiceName(), this);
         addServiceDependencies(builder);
         if (listener != null) {
@@ -60,6 +61,11 @@ public abstract class AbstractIntegrationService<T> extends AbstractService<T> i
     @Override
     public void start(StartContext startContext) throws StartException {
         serviceValue = createServiceValue(startContext);
+    }
+
+    @Override
+    public void stop(StopContext startContext) {
+        serviceValue = null;
     }
 
     protected abstract T createServiceValue(StartContext startContext) throws StartException;

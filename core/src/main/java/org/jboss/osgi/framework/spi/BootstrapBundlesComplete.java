@@ -32,6 +32,6 @@ public class BootstrapBundlesComplete<T> extends BootstrapBundlesService<T> {
 
     @Override
     protected void addServiceDependencies(ServiceBuilder<T> builder) {
-        builder.addDependency(getPreviousService());
+        builder.requires(getPreviousService());
     }
 }

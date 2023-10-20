@@ -23,10 +23,10 @@ package org.jboss.osgi.framework.internal;
 
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 
+import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceController.Mode;
-import org.jboss.msc.service.ServiceListener;
 import org.jboss.msc.service.ServiceTarget;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
@@ -59,9 +59,11 @@ public final class FrameworkInit extends AbstractFrameworkService {
     @Override
     protected void addServiceDependencies(ServiceBuilder<FrameworkState> builder) {
         builder.addDependency(IntegrationServices.FRAMEWORK_CREATE_INTERNAL, FrameworkState.class, injectedFramework);
-        builder.addDependencies(IntegrationServices.FRAMEWORK_CORE_SERVICES);
-        builder.addDependencies(IntegrationServices.BOOTSTRAP_BUNDLES_INSTALL, IntegrationServices.BOOTSTRAP_BUNDLES_COMPLETE);
-        builder.addDependencies(IntegrationServices.PERSISTENT_BUNDLES_INSTALL, IntegrationServices.PERSISTENT_BUNDLES_COMPLETE);
+        builder.requires(IntegrationServices.FRAMEWORK_CORE_SERVICES);
+        builder.requires(IntegrationServices.BOOTSTRAP_BUNDLES_INSTALL);
+        builder.requires(IntegrationServices.BOOTSTRAP_BUNDLES_COMPLETE);
+        builder.requires(IntegrationServices.PERSISTENT_BUNDLES_INSTALL);
+        builder.requires(IntegrationServices.PERSISTENT_BUNDLES_COMPLETE);
         builder.setInitialMode(Mode.ON_DEMAND);
     }
 
@@ -72,7 +74,7 @@ public final class FrameworkInit extends AbstractFrameworkService {
     }
 
     @Override
-    public ServiceController<FrameworkState> install(ServiceTarget serviceTarget, ServiceListener<Object> listener) {
+    public ServiceController<FrameworkState> install(ServiceTarget serviceTarget, LifecycleListener listener) {
         ServiceController<FrameworkState> controller = super.install(serviceTarget, listener);
         new FrameworkInitialized().install(serviceTarget, listener);
         new SystemContextService().install(serviceTarget, listener);
@@ -91,7 +93,7 @@ public final class FrameworkInit extends AbstractFrameworkService {
         @Override
         protected void addServiceDependencies(ServiceBuilder<BundleContext> builder) {
             builder.addDependency(IntegrationServices.SYSTEM_CONTEXT_INTERNAL, BundleContext.class, injectedBundleContext);
-            builder.addDependency(IntegrationServices.FRAMEWORK_INIT_INTERNAL);
+            builder.requires(IntegrationServices.FRAMEWORK_INIT_INTERNAL);
             builder.setInitialMode(initialMode);
         }
 

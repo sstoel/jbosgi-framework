@@ -920,10 +920,32 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
                     execEnvironments.add("JavaSE-1.7");
                 if (Java.isCompatible(Java.VERSION_1_8))
                     execEnvironments.add("JavaSE-1.8");
-                if (Java.isCompatible(Java.VERSION_1_9))
+                if (Java.isCompatible(Java.VERSION_9))
                     execEnvironments.add("JavaSE-9");
-                if (Java.isCompatible(Java.VERSION_1_11))
+                if (Java.isCompatible(Java.VERSION_10))
+                    execEnvironments.add("JavaSE-9");
+                if (Java.isCompatible(Java.VERSION_11))
                     execEnvironments.add("JavaSE-11");
+                if (Java.isCompatible(Java.VERSION_12))
+                    execEnvironments.add("JavaSE-12");
+                if (Java.isCompatible(Java.VERSION_13))
+                    execEnvironments.add("JavaSE-13");
+                if (Java.isCompatible(Java.VERSION_14))
+                    execEnvironments.add("JavaSE-14");
+                if (Java.isCompatible(Java.VERSION_15))
+                    execEnvironments.add("JavaSE-15");
+                if (Java.isCompatible(Java.VERSION_16))
+                    execEnvironments.add("JavaSE-16");
+                if (Java.isCompatible(Java.VERSION_17))
+                    execEnvironments.add("JavaSE-17");
+                if (Java.isCompatible(Java.VERSION_18))
+                    execEnvironments.add("JavaSE-18");
+                if (Java.isCompatible(Java.VERSION_19))
+                    execEnvironments.add("JavaSE-19");
+                if (Java.isCompatible(Java.VERSION_20))
+                    execEnvironments.add("JavaSE-20");
+                if (Java.isCompatible(Java.VERSION_21))
+                    execEnvironments.add("JavaSE-21");
 
                 String envlist = execEnvironments.toString();
                 envlist = envlist.substring(1, envlist.length() - 1);
