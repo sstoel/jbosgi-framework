@@ -390,7 +390,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         refreshPolicy.startBundleRefresh(this);
         try {
             // Remove the revisions from the environment
-            for (XBundleRevision brev : getAllBundleRevisions()) {
+            for (XBundleRevision brev : getAllBundleRevisions().reversed()) {
 
                 if (currentRev != brev) {
                     bundleManager.removeRevisionLifecycle(brev, 0);

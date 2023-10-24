@@ -31,9 +31,9 @@
   <!-- Dependency Sets -->
   <dependencySets>
     <dependencySet>
-      <outputDirectory>javax/inject/api/main</outputDirectory>
+      <outputDirectory>jakarta/inject/api/main</outputDirectory>
       <includes>
-        <include>javax.inject:javax.inject:jar</include>
+        <include>jakarta.inject:jakarta.inject-api:jar</include>
       </includes>
       <useStrictFiltering>true</useStrictFiltering>
       <scope>test</scope>

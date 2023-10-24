@@ -49,7 +49,7 @@
     <!-- Properties -->
     <properties>
         <version.aqute.bnd>0.0.365.SP1</version.aqute.bnd>
-        <version.javax.inject>1</version.javax.inject>
+        <version.jakarta.inject>2.0.1</version.jakarta.inject>
         <version.jboss.osgi.deployment>5.1.0.Final</version.jboss.osgi.deployment>
         <version.jboss.osgi.metadata>7.1.0.Final</version.jboss.osgi.metadata>
         <version.jboss.osgi.resolver>7.1.0.Final</version.jboss.osgi.resolver>
@@ -110,9 +110,9 @@
 
             <!-- Test dependencies -->
             <dependency>
-                <groupId>javax.inject</groupId>
-                <artifactId>javax.inject</artifactId>
-                <version>${version.javax.inject}</version>
+                <groupId>jakarta.inject</groupId>
+                <artifactId>jakarta.inject-api</artifactId>
+                <version>${version.jakarta.inject}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
