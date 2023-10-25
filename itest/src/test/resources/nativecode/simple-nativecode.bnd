@@ -7,12 +7,14 @@ Bundle-NativeCode: \
  linux_ia64/libNative.so; osname=Linux; processor=ia64, \
  macosx_x86/libNative.jnilib; osname="mac os x"; processor=x86_64, \
  macosx_x86/libNative.jnilib; osname="mac os x"; processor=ppc, \
+ macosx_x86/libNative.jnilib; osname="mac os x"; processor=aarch64, \
  windows_x86/Native.dll; osname=Win32; processor=x86, \
  windows_x86/Native.dll; osname=WindowsXP; processor=x86, \
  windows_x86/Native.dll; osname=Windows7; processor=x86, \
  windows_x86/Native.dll; osname=Windows7; processor=amd64
-Include-Resource: libs
 
+Import-Package: org.osgi.framework
+Include-Resource: libs
 -removeheaders: Include-Resource
 
 

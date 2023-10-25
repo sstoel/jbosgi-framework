@@ -68,6 +68,7 @@ public interface SystemPaths {
     };
 
     String[] DEFAULT_SYSTEM_PACKAGES = new String[]{
+            "java.util.logging",
             "javax.accessibility",
             "javax.annotation.processing",
             "javax.crypto",

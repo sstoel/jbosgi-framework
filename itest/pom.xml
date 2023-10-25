@@ -47,8 +47,9 @@
     <!-- Dependencies -->
     <dependencies>
         <dependency>
-            <groupId>biz.aQute</groupId>
-            <artifactId>aQute.bnd</artifactId>
+            <groupId>biz.aQute.bnd</groupId>
+            <artifactId>biz.aQute.bnd</artifactId>
+            <version>7.0.0</version>
         </dependency>
         <dependency>
             <groupId>org.osgi</groupId>
@@ -76,7 +77,8 @@
         </dependency>
         <dependency>
             <groupId>jakarta.inject</groupId>
-            <artifactId>jakarta.inject</artifactId>
+            <artifactId>jakarta.inject-api</artifactId>
+            <version>${version.jakarta.inject}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -87,6 +89,12 @@
         <dependency>
             <groupId>org.jboss.arquillian.junit</groupId>
             <artifactId>arquillian-junit-container</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jboss.arquillian.osgi</groupId>
+            <artifactId>arquillian-osgi-bundle</artifactId>
+            <version>2.2.3.Fork</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -140,11 +148,11 @@
                             <goal>run</goal>
                         </goals>
                         <configuration>
-                            <tasks>
+                            <target>
                                 <property name="maven.runtime.classpath" refid="maven.runtime.classpath" />
                                 <property name="tests.output.dir" value="${project.build.directory}" />
                                 <ant antfile="scripts/antrun-test-jars.xml" />
-                            </tasks>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>

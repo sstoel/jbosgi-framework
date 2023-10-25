@@ -8,6 +8,7 @@ Bundle-NativeCode: \
  macosx_x86/libNative.jnilib; osname="mac os x"; processor=x86_64; processor=ppc; selection-filter="(org.jboss.test.osgi.framework.nativecode=bar)", \
  windows_x86/Native.dll; osname=Win32; osname=WindowsXP; osname=Windows7; selection-filter="(org.jboss.test.osgi.framework.nativecode=bar)", *
 Include-Resource: libs
+Import-Package: org.osgi.framework
 
 -removeheaders: Include-Resource
 
