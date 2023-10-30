@@ -15,8 +15,6 @@ Bundle-NativeCode: \
 
 Include-Resource: libs
 
-Import-Package: org.osgi.framework
-
 -removeheaders: Include-Resource
 
 

@@ -8,7 +8,6 @@ Bundle-NativeCode: \
  macosx_x86/libNative.jnilib; osname="mac os x"; processor=x86_64; processor=ppc; language=zz, \
  windows_x86/Native.dll; osname=Win32; osname=WindowsXP; osname=Windows7; language=zz
 Include-Resource: libs
-Import-Package: org.osgi.framework
 
 -removeheaders: Include-Resource
 
