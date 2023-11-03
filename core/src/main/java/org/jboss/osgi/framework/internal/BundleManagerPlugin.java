@@ -640,7 +640,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     void removeBundle(UserBundleState userBundle, int options) {
         LOGGER.debugf("Removing bundle: %s", userBundle);
-        for (XBundleRevision brev : userBundle.getAllBundleRevisions().reversed()) {
+        for (XBundleRevision brev : userBundle.getAllBundleRevisions()) {
             if ((options & InternalConstants.UNINSTALL_INTERNAL) != 0) {
                 removeRevisionLifecycle(brev, options);
             } else {
@@ -735,7 +735,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     void unresolveBundle(UserBundleState userBundle) {
         LOGGER.debugf("Unresolving bundle: %s", userBundle);
         ModuleManager moduleManager = getFrameworkState().getModuleManager();
-        for (XBundleRevision brev : userBundle.getAllBundleRevisions().reversed()) {
+        for (XBundleRevision brev : userBundle.getAllBundleRevisions()) {
             UserBundleRevision userRev = (UserBundleRevision) brev;
             if (userRev.isFragment() == false) {
                 ModuleIdentifier identifier = moduleManager.getModuleIdentifier(brev);
