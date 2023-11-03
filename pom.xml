@@ -48,7 +48,7 @@
 
     <!-- Properties -->
     <properties>
-        <version.aqute.bnd>0.0.365.SP1</version.aqute.bnd>
+        <version.aqute.bnd>7.0.0</version.aqute.bnd>
         <version.jakarta.inject>2.0.1</version.jakarta.inject>
         <version.jboss.osgi.deployment>5.1.0.Final</version.jboss.osgi.deployment>
         <version.jboss.osgi.metadata>7.1.0.Final</version.jboss.osgi.metadata>
@@ -65,14 +65,8 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>biz.aQute</groupId>
-                <artifactId>aQute.bnd</artifactId>
-                <exclusions>
-                    <exclusion>
-                        <groupId>org.osgi</groupId>
-                        <artifactId>org.osgi.compendium</artifactId>
-                    </exclusion>
-                </exclusions>
+                <groupId>biz.aQute.bnd</groupId>
+                <artifactId>biz.aQute.bnd</artifactId>
                 <version>${version.aqute.bnd}</version>
             </dependency>
 
