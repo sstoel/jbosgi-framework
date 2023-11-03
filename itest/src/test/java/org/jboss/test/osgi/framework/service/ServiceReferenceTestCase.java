@@ -211,6 +211,7 @@ public class ServiceReferenceTestCase extends OSGiFrameworkTest {
         for (String key : sref.getPropertyKeys())
             actual.add(key);
 
+        expected.add(Constants.SERVICE_BUNDLEID);
         assertEquals(expected, actual);
     }
 

@@ -28,6 +28,7 @@ import java.util.Properties;
 import org.jboss.osgi.spi.framework.OSGiBootstrap;
 import org.jboss.osgi.spi.framework.OSGiBootstrapProvider;
 import org.jboss.osgi.testing.OSGiFrameworkTest;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
@@ -48,7 +49,7 @@ public class NativeCodeTestCase extends OSGiFrameworkTest {
     public void testNativeCode() throws Exception {
         BundleContext context = getFramework().getBundleContext();
 
-        Bundle bundleA = context.installBundle(getTestArchivePath("simple-nativecode.jar"));
+        Bundle bundleA = installBundle(getTestArchivePath("simple-nativecode.jar"));
         assertBundleState(Bundle.INSTALLED, bundleA.getState());
 
         bundleA.start();

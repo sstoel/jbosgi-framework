@@ -120,7 +120,7 @@
     <!-- Modules -->
     <modules>
         <module>core</module>
-<!--        <module>itest</module>-->
+        <module>itest</module>
         <module>aggregated</module>
     </modules>
 
@@ -210,8 +210,8 @@
                         <artifactId>maven-compiler-plugin</artifactId>
                         <configuration>
                             <!-- Eclipse R5 TCK does not run when this is 1.7 -->
-                            <source>11</source>
-                            <target>11</target>
+                            <source>21</source>
+                            <target>21</target>
                         </configuration>
                     </plugin>
                 </plugins>
