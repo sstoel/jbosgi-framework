@@ -23,6 +23,7 @@ package org.jboss.osgi.framework.internal;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Set;
@@ -40,19 +41,29 @@ final class JDKPaths {
     static final Set<String> JDK;
 
     static {
-        final Set<String> pathSet = new HashSet<String>(1024);
-        final Set<String> jarSet = new HashSet<String>(1024);
-        final String sunBootClassPath = SecurityActions.getSystemProperty("sun.boot.class.path", null);
-        final String javaClassPath = SecurityActions.getSystemProperty("java.class.path", null);
-        processClassPathItem(sunBootClassPath, jarSet, pathSet);
-        processClassPathItem(javaClassPath, jarSet, pathSet);
-        JDK = pathSet;
+        final Set<String> pathSet = JDKSpecific.getJDKPaths();
+        if (pathSet.size() == 0) throw new IllegalStateException("Something went wrong with system paths set up");
+        JDK = Collections.unmodifiableSet(pathSet);
     }
 
     private JDKPaths() {
     }
 
-    private static void processClassPathItem(final String classPath, final Set<String> jarSet, final Set<String> pathSet) {
+    static void processJar(final Set<String> pathSet, final File file) throws IOException {
+        try (final ZipFile zipFile = new ZipFile(file)) {
+            final Enumeration<? extends ZipEntry> entries = zipFile.entries();
+            while (entries.hasMoreElements()) {
+                final ZipEntry entry = entries.nextElement();
+                final String name = entry.getName();
+                final int lastSlash = name.lastIndexOf('/');
+                if (lastSlash != -1) {
+                    pathSet.add(name.substring(0, lastSlash));
+                }
+            }
+        }
+    }
+
+    static void processClassPathItem(final String classPath, final Set<String> jarSet, final Set<String> pathSet) {
         if (classPath == null) return;
         int s = 0, e;
         do {
@@ -61,23 +72,10 @@ final class JDKPaths {
             if (! jarSet.contains(item)) {
                 final File file = new File(item);
                 if (file.isDirectory()) {
-                    processDirectory0(pathSet, file);
+                    processDirectory(pathSet, file);
                 } else {
                     try {
-                        final ZipFile zipFile = new ZipFile(file);
-                        try {
-                            final Enumeration<? extends ZipEntry> entries = zipFile.entries();
-                            while (entries.hasMoreElements()) {
-                                final ZipEntry entry = entries.nextElement();
-                                final String name = entry.getName();
-                                final int lastSlash = name.lastIndexOf('/');
-                                if (lastSlash != -1) {
-                                    pathSet.add(name.substring(0, lastSlash));
-                                }
-                            }
-                        } finally {
-                            zipFile.close();
-                        }
+                        processJar(pathSet, file);
                     } catch (IOException ex) {
                         // ignore
                     }
@@ -87,7 +85,7 @@ final class JDKPaths {
         } while (e != -1);
     }
 
-    private static void processDirectory0(final Set<String> pathSet, final File file) {
+    static void processDirectory(final Set<String> pathSet, final File file) {
         for (File entry : file.listFiles()) {
             if (entry.isDirectory()) {
                 processDirectory1(pathSet, entry, file.getPath());
@@ -105,7 +103,7 @@ final class JDKPaths {
             } else {
                 String packagePath = entry.getParent();
                 if (packagePath != null) {
-                    packagePath = packagePath.substring(pathBase.length()).replace('\\', '/');;
+                    packagePath = packagePath.substring(pathBase.length()).replace('\\', '/');
                     if(packagePath.startsWith("/")) {
                         packagePath = packagePath.substring(1);
                     }

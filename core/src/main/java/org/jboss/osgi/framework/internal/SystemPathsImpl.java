@@ -94,6 +94,7 @@ public final class SystemPathsImpl implements SystemPaths {
             bootDelegationPackages.add("sun.*");
             bootDelegationPackages.add("com.sun.*");
         }
+        bootDelegationPackages.add("java.*");
     }
 
     @Override
