@@ -164,7 +164,7 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
         builder.addListener(tracker);
         ServiceController<String> controller = builder.install();
-       // tracker.handleEvent(controller, LifecycleEvent.DOWN);
+        tracker.handleEvent(controller, LifecycleEvent.DOWN);
 
         controller.setMode(Mode.NEVER);
 
