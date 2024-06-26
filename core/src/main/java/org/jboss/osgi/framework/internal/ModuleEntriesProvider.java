@@ -52,13 +52,11 @@ public final class ModuleEntriesProvider implements EntriesProvider {
 
     @Override
     public Enumeration<String> getEntryPaths(String path) {
-        Enumeration<URL> urls = module.getExportedResources(path);
-        if (urls == null)
-            return null;
+        Iterator<Resource> urls = module.getClassLoader().iterateResources(path, false);
 
-        Vector<String> result = new Vector<String>();
-        while (urls.hasMoreElements())
-            result.add(urls.nextElement().getPath());
+        Vector<String> result = new Vector<>();
+        while (urls.hasNext())
+            result.add(urls.next().getName());
 
         return result.elements();
     }
