@@ -27,7 +27,7 @@
     <parent>
         <groupId>org.jboss.osgi</groupId>
         <artifactId>jbosgi-parent</artifactId>
-        <version>4.2.0</version>
+        <version>4.3.0</version>
     </parent>
 
     <name>JBossOSGi Framework</name>
@@ -36,7 +36,7 @@
     <artifactId>jbosgi-framework-parent</artifactId>
     <packaging>pom</packaging>
 
-    <version>6.2.0.Final</version>
+    <version>6.3.0.Final</version>
 
     <!-- Source Control -->
     <scm>
@@ -50,12 +50,12 @@
     <properties>
         <version.aqute.bnd>7.0.0</version.aqute.bnd>
         <version.jakarta.inject>2.0.1</version.jakarta.inject>
-        <version.jboss.osgi.deployment>5.2.0.Final</version.jboss.osgi.deployment>
-        <version.jboss.osgi.metadata>7.2.0.Final</version.jboss.osgi.metadata>
-        <version.jboss.osgi.resolver>7.2.0.Final</version.jboss.osgi.resolver>
-        <version.jboss.osgi.spi>7.2.0.Final</version.jboss.osgi.spi>
-        <version.jboss.osgi.testing>5.2.0.Final</version.jboss.osgi.testing>
-        <version.jboss.osgi.vfs>5.2.0.Final</version.jboss.osgi.vfs>
+        <version.jboss.osgi.deployment>5.3.0.Final</version.jboss.osgi.deployment>
+        <version.jboss.osgi.metadata>7.3.0.Final</version.jboss.osgi.metadata>
+        <version.jboss.osgi.resolver>7.3.0.Final</version.jboss.osgi.resolver>
+        <version.jboss.osgi.spi>7.3.0.Final</version.jboss.osgi.spi>
+        <version.jboss.osgi.testing>5.3.0.Final</version.jboss.osgi.testing>
+        <version.jboss.osgi.vfs>5.3.0.Final</version.jboss.osgi.vfs>
 
         <surefire.profiler.args />
         <surefire.system.args>-ea ${surefire.profiler.args}</surefire.system.args>
