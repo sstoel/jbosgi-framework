@@ -678,13 +678,11 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             case UPDATE:
             case REFRESH:
             case UNINSTALL:
+            case STOP:
                 items = new LockableItem[] { wireLock, (LockableItem) bundle };
                 break;
             case START:
                 items = new LockableItem[] { bundle.isResolved() ? (LockableItem) bundle : wireLock, (LockableItem) bundle };
-                break;
-            case STOP:
-                items = new LockableItem[] { (LockableItem) bundle };
                 break;
         }
         return items;
