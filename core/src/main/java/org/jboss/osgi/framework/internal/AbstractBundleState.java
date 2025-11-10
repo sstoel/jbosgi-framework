@@ -342,9 +342,10 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
     void addServiceInUse(ServiceState<?> serviceState) {
         LOGGER.tracef("Add service in use %s to: %s", serviceState, this);
-        usedServices.putIfAbsent(serviceState, new AtomicInteger());
-        AtomicInteger count = usedServices.get(serviceState);
-        count.incrementAndGet();
+        AtomicInteger count = usedServices.computeIfAbsent(serviceState, (k) -> new AtomicInteger());
+        synchronized (count) {
+            count.incrementAndGet();
+        }
     }
 
     int removeServiceInUse(ServiceState<?> serviceState) {
@@ -353,11 +354,13 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
         if (count == null)
             return -1;
 
-        int countVal = count.decrementAndGet();
-        if (countVal == 0)
-            usedServices.remove(serviceState);
+        synchronized (count) {
+            int countVal = count.decrementAndGet();
+            if (countVal == 0)
+                usedServices.remove(serviceState);
 
-        return countVal;
+            return countVal;
+        }
     }
 
     @Override
