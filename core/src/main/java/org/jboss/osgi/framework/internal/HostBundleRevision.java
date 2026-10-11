@@ -40,10 +40,14 @@ import org.jboss.msc.service.ServiceTarget;
 import org.jboss.osgi.deployment.deployer.Deployment;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.metadata.OSGiMetaData;
+import org.jboss.osgi.resolver.XPackageRequirement;
 import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleException;
+import org.osgi.framework.namespace.PackageNamespace;
+import org.osgi.framework.wiring.BundleRequirement;
 import org.osgi.framework.wiring.BundleRevision;
+import org.osgi.resource.Requirement;
 
 /**
  * A {@link HostBundleRevision} is responsible for the classloading and resource loading of a bundle.
@@ -110,6 +114,36 @@ final class HostBundleRevision extends UserBundleRevision {
 
     FallbackLoader getFallbackLoader() {
         return fallbackLoader;
+    }
+
+    /**
+     * The requirements of this revision, which include the dynamic imports that weaving hooks have added.
+     * The wiring of this revision gets its dynamic package requirements from here.
+     */
+    @Override
+    public List<Requirement> getRequirements(String namespace) {
+        List<Requirement> result = super.getRequirements(namespace);
+        FallbackLoader loader = fallbackLoader;
+        if (loader != null && (namespace == null || PackageNamespace.PACKAGE_NAMESPACE.equals(namespace))) {
+            List<XPackageRequirement> weavingImports = loader.getDynamicWeavingImports();
+            if (!weavingImports.isEmpty()) {
+                result = new ArrayList<Requirement>(result);
+                result.addAll(weavingImports);
+                result = Collections.unmodifiableList(result);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * The requirements declared in the bundle manifest, without the weaving imports.
+     */
+    @Override
+    public List<BundleRequirement> getDeclaredRequirements(String namespace) {
+        List<BundleRequirement> result = new ArrayList<BundleRequirement>();
+        for (Requirement req : super.getRequirements(namespace))
+            result.add((BundleRequirement) req);
+        return result;
     }
 
     @Override

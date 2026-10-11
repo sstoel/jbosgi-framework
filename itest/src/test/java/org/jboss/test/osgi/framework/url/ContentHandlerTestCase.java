@@ -74,7 +74,46 @@ public class ContentHandlerTestCase extends OSGiFrameworkTest {
         }
     }
 
+    @Test
+    public void testContentHandlerRegisteredAfterFirstUse() throws Exception {
+        Hashtable<String, Object> props = new Hashtable<String, Object>();
+        props.put(URLConstants.URL_HANDLER_PROTOCOL, new String[] { PROTOCOL + "2" });
+        ServiceRegistration<?> streamReg = getSystemContext().registerService(URLStreamHandlerService.class.getName(), new TestURLStreamHandlerService(MIMETYPE + "2"), props);
+        try {
+            // The content type is used before a content handler service is registered for it
+            assertTrue(new URL(PROTOCOL + "2://test").getContent() instanceof InputStream);
+
+            ServiceRegistration<?> contentReg = registerContentHandler(MIMETYPE + "2", "late");
+            try {
+                assertEquals("late", new URL(PROTOCOL + "2://test").getContent());
+            } finally {
+                contentReg.unregister();
+            }
+        } finally {
+            streamReg.unregister();
+        }
+    }
+
+    @Test
+    public void testBuiltinContentHandlerNotOverridden() throws Exception {
+        Hashtable<String, Object> props = new Hashtable<String, Object>();
+        props.put(URLConstants.URL_HANDLER_PROTOCOL, new String[] { PROTOCOL + "3" });
+        ServiceRegistration<?> streamReg = getSystemContext().registerService(URLStreamHandlerService.class.getName(), new TestURLStreamHandlerService("text/plain"), props);
+        ServiceRegistration<?> contentReg = registerContentHandler("text/plain", "custom");
+        try {
+            // The JVM has a content handler for this type
+            assertTrue(!"custom".equals(new URL(PROTOCOL + "3://test").getContent()));
+        } finally {
+            contentReg.unregister();
+            streamReg.unregister();
+        }
+    }
+
     private ServiceRegistration<?> registerContentHandler(final String content) throws Exception {
+        return registerContentHandler(MIMETYPE, content);
+    }
+
+    private ServiceRegistration<?> registerContentHandler(String mimetype, final String content) throws Exception {
         ContentHandler handler = new ContentHandler() {
             @Override
             public Object getContent(URLConnection urlc) throws IOException {
@@ -82,11 +121,21 @@ public class ContentHandlerTestCase extends OSGiFrameworkTest {
             }
         };
         Hashtable<String, Object> props = new Hashtable<String, Object>();
-        props.put(URLConstants.URL_CONTENT_MIMETYPE, new String[] { MIMETYPE });
+        props.put(URLConstants.URL_CONTENT_MIMETYPE, new String[] { mimetype });
         return getSystemContext().registerService(ContentHandler.class.getName(), handler, props);
     }
 
     private static class TestURLStreamHandlerService extends AbstractURLStreamHandlerService {
+
+        private final String mimetype;
+
+        TestURLStreamHandlerService() {
+            this(MIMETYPE);
+        }
+
+        TestURLStreamHandlerService(String mimetype) {
+            this.mimetype = mimetype;
+        }
 
         @Override
         public URLConnection openConnection(final URL url) throws IOException {
@@ -98,7 +147,7 @@ public class ContentHandlerTestCase extends OSGiFrameworkTest {
 
                 @Override
                 public String getContentType() {
-                    return MIMETYPE;
+                    return mimetype;
                 }
 
                 @Override

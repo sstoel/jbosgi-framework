@@ -72,6 +72,8 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private final ValueProvider<S> valueProvider;
     private final ServiceReference<S> reference;
     private ServiceRegistration<S> registration;
+    // The registration that is passed to a prototype factory, also after the service is unregistered
+    private final ServiceRegistration<S> factoryRegistration;
     private Set<XBundle> usingBundles;
     private Map<Long, ServiceFactoryHolder<S>> factoryValues;
     private Map<Long, Set<S>> prototypeValues;
@@ -107,6 +109,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
 
         // Create the {@link ServiceRegistration} and {@link ServiceReference}
         this.registration = new ServiceRegistrationWrapper(this);
+        this.factoryRegistration = registration;
         this.reference = new ServiceReferenceWrapper(this);
     }
 
@@ -209,7 +212,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         PrototypeServiceFactory<S> factory = (PrototypeServiceFactory<S>) valueProvider.getValue();
         S result;
         try {
-            result = factory.getService(bundle, getRegistration());
+            result = factory.getService(bundle, factoryRegistration);
         } catch (Throwable th) {
             ServiceException sex = new ServiceException("Cannot get factory value", ServiceException.FACTORY_EXCEPTION, th);
             serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, sex);
@@ -221,6 +224,11 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
             return null;
         }
         synchronized (this) {
+            // The service may have been unregistered while the factory was called
+            if (isUnregistered()) {
+                ungetPrototypeValueInternal(bundle, result);
+                return null;
+            }
             if (prototypeValues == null)
                 prototypeValues = new HashMap<Long, Set<S>>();
 
@@ -285,7 +293,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private void ungetPrototypeValueInternal(XBundle bundle, S value) {
         PrototypeServiceFactory<S> factory = (PrototypeServiceFactory<S>) valueProvider.getValue();
         try {
-            factory.ungetService(bundle, getRegistration(), value);
+            factory.ungetService(bundle, factoryRegistration, value);
         } catch (RuntimeException rte) {
             ServiceException sex = new ServiceException("Cannot unget factory value", ServiceException.FACTORY_EXCEPTION, rte);
             serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.WARNING, sex);

@@ -40,6 +40,8 @@ import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.asset.Asset;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.test.osgi.framework.classloader.support.a.A;
+import org.jboss.test.osgi.framework.simple.bundleA.BeanA;
+import org.jboss.test.osgi.framework.simple.bundleB.BeanB;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.ServiceRegistration;
@@ -47,6 +49,9 @@ import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
 import org.osgi.framework.hooks.weaving.WovenClassListener;
 import org.osgi.framework.namespace.PackageNamespace;
+import org.osgi.framework.wiring.BundleRequirement;
+import org.osgi.framework.wiring.BundleRevision;
+import org.osgi.framework.wiring.BundleWiring;
 
 /**
  * Test that a {@link WovenClassListener} is notified of the state changes of a {@link WovenClass}.
@@ -74,6 +79,52 @@ public class WovenClassListenerTestCase extends OSGiFrameworkTest {
             assertEquals(Arrays.asList(WovenClass.TRANSFORMED, WovenClass.DEFINED), listener.states);
             assertEquals("No failures in the listener: " + listener.failures, 0, listener.failures.size());
             assertSame(clazz, listener.wovenClass.getDefinedClass());
+
+            // The dynamic import is a requirement in the wiring of the bundle, but it is not declared by the bundle
+            BundleRevision brev = bundle.adapt(BundleRevision.class);
+            List<BundleRequirement> reqs = bundle.adapt(BundleWiring.class).getRequirements(PackageNamespace.PACKAGE_NAMESPACE);
+            assertEquals(1, reqs.size());
+            assertSame(brev, reqs.get(0).getRevision());
+            assertSame(reqs.get(0), bundle.adapt(BundleWiring.class).getRequirements(PackageNamespace.PACKAGE_NAMESPACE).get(0));
+            assertTrue(brev.getDeclaredRequirements(PackageNamespace.PACKAGE_NAMESPACE).isEmpty());
+        } finally {
+            bundle.uninstall();
+            listenerReg.unregister();
+            hookReg.unregister();
+        }
+    }
+
+    @Test
+    public void testListenerStatesForSubclass() throws Exception {
+        WeavingHook hook = new WeavingHook() {
+            public void weave(WovenClass wovenClass) {
+            }
+        };
+        final List<String> events = new ArrayList<String>();
+        WovenClassListener listener = new WovenClassListener() {
+            public void modified(WovenClass wovenClass) {
+                String className = wovenClass.getClassName();
+                events.add(className.substring(className.lastIndexOf('.') + 1) + ":" + wovenClass.getState());
+            }
+        };
+        ServiceRegistration<WeavingHook> hookReg = getSystemContext().registerService(WeavingHook.class, hook, null);
+        ServiceRegistration<WovenClassListener> listenerReg = getSystemContext().registerService(WovenClassListener.class, listener, null);
+
+        // The super class is loaded by the same class loader while the sub class is defined
+        final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, "woven-subclass");
+        archive.addClasses(BeanA.class, BeanB.class);
+        archive.setManifest(new Asset() {
+            public InputStream openStream() {
+                OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();
+                builder.addBundleManifestVersion(2);
+                builder.addBundleSymbolicName(archive.getName());
+                return builder.openStream();
+            }
+        });
+        Bundle bundle = installBundle(archive);
+        try {
+            assertNotNull(bundle.loadClass(BeanA.class.getName()));
+            assertEquals(Arrays.asList("BeanA:" + WovenClass.TRANSFORMED, "BeanB:" + WovenClass.TRANSFORMED, "BeanB:" + WovenClass.DEFINED, "BeanA:" + WovenClass.DEFINED), events);
         } finally {
             bundle.uninstall();
             listenerReg.unregister();

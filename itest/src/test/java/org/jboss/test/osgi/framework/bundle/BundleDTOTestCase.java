@@ -25,6 +25,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.io.InputStream;
@@ -242,6 +243,47 @@ public class BundleDTOTestCase extends OSGiFrameworkTest {
             assertNotNull(sldto);
             assertEquals(startLevel.getStartLevel(), sldto.startLevel);
             assertEquals(startLevel.getInitialBundleStartLevel(), sldto.initialBundleStartLevel);
+        } finally {
+            bundle.uninstall();
+        }
+    }
+
+    @Test
+    public void testWiringDTOAfterUpdate() throws Exception {
+        JavaArchive archive = getBundleArchive("dto-update");
+        Bundle bundle = installBundle(archive);
+        try {
+            bundle.start();
+            bundle.update(toInputStream(archive));
+
+            // The wiring of the old revision is no longer in use
+            assertEquals(2, bundle.adapt(BundleRevisionDTO[].class).length);
+            BundleWiringDTO[] dtos = bundle.adapt(BundleWiringDTO[].class);
+            assertNotNull(dtos);
+            assertEquals(1, dtos.length);
+            assertNotNull(bundle.adapt(BundleWiringDTO.class));
+        } finally {
+            bundle.uninstall();
+        }
+    }
+
+    @Test
+    public void testDTOPackagesAreSystemPackages() throws Exception {
+        final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, "dto-imports");
+        archive.setManifest(new Asset() {
+            public InputStream openStream() {
+                OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();
+                builder.addBundleManifestVersion(2);
+                builder.addBundleSymbolicName(archive.getName());
+                builder.addImportPackages(BundleDTO.class, BundleStartLevelDTO.class, BundleWiringDTO.class, CapabilityDTO.class, org.osgi.dto.DTO.class);
+                return builder.openStream();
+            }
+        });
+        Bundle bundle = installBundle(archive);
+        try {
+            bundle.start();
+            assertEquals(Bundle.ACTIVE, bundle.getState());
+            assertSame(BundleWiringDTO.class, bundle.loadClass(BundleWiringDTO.class.getName()));
         } finally {
             bundle.uninstall();
         }

@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.ContentHandler;
+import java.net.ContentHandlerFactory;
 import java.net.InetAddress;
 import java.net.Proxy;
 import java.net.URL;
@@ -40,6 +41,11 @@ import java.util.Dictionary;
 import java.util.Hashtable;
 import java.util.List;
 
+import java.util.Locale;
+import java.util.Map;
+import java.util.ServiceConfigurationError;
+import java.util.ServiceLoader;
+import java.util.concurrent.ConcurrentHashMap;
 import org.jboss.osgi.framework.spi.URLHandlerSupport;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
@@ -63,6 +69,7 @@ final class URLHandlerSupportImpl implements URLHandlerSupport {
     private final BundleManagerPlugin bundleManager;
     private ServiceTracker<URLStreamHandlerService, URLStreamHandlerService> streamServiceTracker;
     private ServiceTracker<ContentHandler, ContentHandler> contentServiceTracker;
+    private final Map<String, Boolean> builtinContentHandlers = new ConcurrentHashMap<String, Boolean>();
     private ServiceRegistration<URLStreamHandlerService> registration;
 
     private static OSGiContentHandlerFactoryDelegate contentHandlerDelegate;
@@ -218,8 +225,8 @@ final class URLHandlerSupportImpl implements URLHandlerSupport {
      */
     @Override
     public ContentHandler createContentHandler(final String mimetype) {
-        // No content handler was ever registered for this mime type
-        if (contentHandlerDelegate.getContentHandlers(mimetype) == null)
+        // The content handlers of the JVM cannot be overridden
+        if (hasBuiltinContentHandler(mimetype))
             return null;
 
         // The JVM caches its default content handler when this factory returns null and does not ask again.
@@ -228,25 +235,82 @@ final class URLHandlerSupportImpl implements URLHandlerSupport {
 
             @Override
             public Object getContent(URLConnection urlc) throws IOException {
-                ContentHandler handler = getRegisteredContentHandler(mimetype);
-                return handler != null ? handler.getContent(urlc) : urlc.getInputStream();
+                ServiceReference<ContentHandler> ref = contentHandlerDelegate.getContentHandler(mimetype);
+                BundleContext context = getServiceContext(ref);
+                ContentHandler handler = context != null ? context.getService(ref) : null;
+                if (handler == null)
+                    return urlc.getInputStream();
+                try {
+                    return handler.getContent(urlc);
+                } finally {
+                    context.ungetService(ref);
+                }
             }
 
             @Override
             @SuppressWarnings("rawtypes")
             public Object getContent(URLConnection urlc, Class[] classes) throws IOException {
-                ContentHandler handler = getRegisteredContentHandler(mimetype);
-                return handler != null ? handler.getContent(urlc, classes) : super.getContent(urlc, classes);
+                ServiceReference<ContentHandler> ref = contentHandlerDelegate.getContentHandler(mimetype);
+                BundleContext context = getServiceContext(ref);
+                ContentHandler handler = context != null ? context.getService(ref) : null;
+                if (handler == null)
+                    return super.getContent(urlc, classes);
+                try {
+                    return handler.getContent(urlc, classes);
+                } finally {
+                    context.ungetService(ref);
+                }
             }
         };
     }
 
-    private ContentHandler getRegisteredContentHandler(String mimetype) {
-        ServiceReference<ContentHandler> ref = contentHandlerDelegate.getContentHandler(mimetype);
+    private BundleContext getServiceContext(ServiceReference<ContentHandler> ref) {
         Bundle bundle = ref != null ? ref.getBundle() : null;
-        BundleContext context = bundle != null ? bundle.getBundleContext() : null;
-        Object service = context != null ? context.getService(ref) : null;
-        return service instanceof ContentHandler ? (ContentHandler) service : null;
+        return bundle != null ? bundle.getBundleContext() : null;
+    }
+
+    /**
+     * True if the JVM provides a content handler for the given mime type
+     */
+    private boolean hasBuiltinContentHandler(String mimetype) {
+        Boolean result = builtinContentHandlers.get(mimetype);
+        if (result == null) {
+            result = Boolean.FALSE;
+
+            // Content handler factories that are provided by the JVM modules
+            try {
+                for (ContentHandlerFactory factory : ServiceLoader.load(ContentHandlerFactory.class, ClassLoader.getSystemClassLoader())) {
+                    if (factory.createContentHandler(mimetype) != null) {
+                        result = Boolean.TRUE;
+                        break;
+                    }
+                }
+            } catch (RuntimeException | ServiceConfigurationError ex) {
+                LOGGER.debugf(ex, "Cannot load content handler factories");
+            }
+
+            // Content handler classes that follow the package naming convention
+            if (!result) {
+                StringBuilder typeName = new StringBuilder();
+                for (char ch : mimetype.toLowerCase(Locale.ENGLISH).toCharArray())
+                    typeName.append(ch == '/' ? '.' : Character.isLetterOrDigit(ch) ? ch : '_');
+
+                String packages = SecurityActions.getSystemProperty("java.content.handler.pkgs", "");
+                for (String packageName : (packages + "|sun.net.www.content").split("\\|")) {
+                    if (packageName.trim().isEmpty())
+                        continue;
+                    try {
+                        Class.forName(packageName.trim() + "." + typeName, false, ClassLoader.getSystemClassLoader());
+                        result = Boolean.TRUE;
+                        break;
+                    } catch (ClassNotFoundException | LinkageError ex) {
+                        // ignore
+                    }
+                }
+            }
+            builtinContentHandlers.put(mimetype, result);
+        }
+        return result;
     }
 
     /**

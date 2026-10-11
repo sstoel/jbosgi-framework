@@ -23,10 +23,6 @@ package org.jboss.osgi.framework.internal;
 
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,8 +37,6 @@ import java.util.Set;
 
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.resolver.XBundle;
-import org.jboss.osgi.resolver.XBundleRevision;
-import org.jboss.osgi.resolver.XPackageRequirement;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
@@ -51,8 +45,6 @@ import org.osgi.framework.ServiceReference;
 import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
 import org.osgi.framework.hooks.weaving.WovenClassListener;
-import org.osgi.framework.namespace.PackageNamespace;
-import org.osgi.framework.wiring.BundleRequirement;
 import org.osgi.framework.wiring.BundleWiring;
 
 /**
@@ -67,6 +59,7 @@ class WeavingContext {
     private static final Set<ServiceReference<WeavingHook>> blacklist = new HashSet<ServiceReference<WeavingHook>>();
 
     private final UserBundleState hostState;
+    private final WeavingContext parent;
     private final List<HookRegistration> weavingHooks;
     private final List<String> weavingImports = new ArrayList<String>();
     private Map<String, ContextClass> wovenClasses = new HashMap<String, ContextClass>();
@@ -76,13 +69,15 @@ class WeavingContext {
     }
 
     static WeavingContext create(UserBundleState hostState) {
-        WeavingContext context = new WeavingContext(hostState);
+        // Defining a class loads its super types on the same thread, so contexts can be nested
+        WeavingContext context = new WeavingContext(hostState, contextAssociation.get());
         contextAssociation.set(context);
         return context;
     }
 
-    private WeavingContext(UserBundleState hostState) {
+    private WeavingContext(UserBundleState hostState, WeavingContext parent) {
         this.hostState = hostState;
+        this.parent = parent;
 
         BundleManagerPlugin bundleManager = hostState.getBundleManager();
         BundleContext syscontext = bundleManager.getSystemContext();
@@ -136,7 +131,11 @@ class WeavingContext {
     }
 
     void close() {
-        contextAssociation.remove();
+        if (parent != null) {
+            contextAssociation.set(parent);
+        } else {
+            contextAssociation.remove();
+        }
     }
 
     static class HookRegistration {
@@ -273,42 +272,9 @@ class WeavingContext {
             return redefinedClass;
         }
 
-        /**
-         * The wiring of the bundle, which includes the dynamic imports that the weaving hooks have added.
-         */
         @Override
         public BundleWiring getBundleWiring() {
-            final BundleWiring wiring = hostState.adapt(BundleWiring.class);
-            XBundleRevision brev = hostState.getBundleRevision();
-            final FallbackLoader fallbackLoader = brev instanceof HostBundleRevision ? ((HostBundleRevision) brev).getFallbackLoader() : null;
-            if (wiring == null || fallbackLoader == null)
-                return wiring;
-
-            InvocationHandler handler = new InvocationHandler() {
-                @Override
-                @SuppressWarnings("unchecked")
-                public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-                    Object result;
-                    try {
-                        result = method.invoke(wiring, args);
-                    } catch (InvocationTargetException ex) {
-                        throw ex.getCause();
-                    }
-                    if (result != null && method.getName().equals("getRequirements")) {
-                        String namespace = (String) args[0];
-                        if (namespace == null || PackageNamespace.PACKAGE_NAMESPACE.equals(namespace)) {
-                            List<BundleRequirement> reqs = new ArrayList<BundleRequirement>((List<BundleRequirement>) result);
-                            for (XPackageRequirement req : fallbackLoader.getDynamicWeavingImports()) {
-                                if (!reqs.contains(req))
-                                    reqs.add((BundleRequirement) req);
-                            }
-                            result = Collections.unmodifiableList(reqs);
-                        }
-                    }
-                    return result;
-                }
-            };
-            return (BundleWiring) Proxy.newProxyInstance(BundleWiring.class.getClassLoader(), new Class<?>[] { BundleWiring.class }, handler);
+            return hostState.adapt(BundleWiring.class);
         }
 
         @Override

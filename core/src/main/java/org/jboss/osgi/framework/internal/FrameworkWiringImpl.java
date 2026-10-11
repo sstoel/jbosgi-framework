@@ -35,6 +35,7 @@ import java.util.ListIterator;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
+import java.util.regex.Pattern;
 import org.jboss.osgi.framework.spi.BundleManager;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.FrameworkWiringLock;
@@ -54,6 +55,7 @@ import org.jboss.osgi.resolver.spi.AbstractBundleWire;
 import org.jboss.osgi.resolver.spi.ResolverHookException;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleException;
+import org.osgi.framework.Constants;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
 import org.jboss.osgi.resolver.XRequirement;
@@ -298,10 +300,25 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         Collection<BundleCapability> result = new HashSet<BundleCapability>();
 
         for (XBundle bundle : bundleManager.getBundles(null)) {
-            XBundleRevision xres = bundle.getBundleRevision();
-            for (BundleCapability bcap : xres.getDeclaredCapabilities(requirement.getNamespace())) {
-                if (matches(requirement, bcap))
-                    result.add(bcap);
+            if (bundle.getState() == Bundle.UNINSTALLED)
+                continue;
+
+            // The current revision and the revisions that are still in use
+            Set<BundleRevision> brevs = new LinkedHashSet<BundleRevision>();
+            brevs.add(bundle.getBundleRevision());
+            BundleRevisions revisions = bundle.adapt(BundleRevisions.class);
+            if (revisions != null) {
+                for (BundleRevision brev : revisions.getRevisions()) {
+                    BundleWiring wiring = brev.getWiring();
+                    if (wiring != null && wiring.isInUse())
+                        brevs.add(brev);
+                }
+            }
+            for (BundleRevision brev : brevs) {
+                for (BundleCapability bcap : brev.getDeclaredCapabilities(requirement.getNamespace())) {
+                    if (matches(requirement, bcap))
+                        result.add(bcap);
+                }
             }
         }
 
@@ -313,13 +330,27 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             return ((XRequirement) requirement).matches(cap);
 
         String filterSpec = requirement.getDirectives().get(Namespace.REQUIREMENT_FILTER_DIRECTIVE);
-        if (filterSpec == null)
-            return true;
-        try {
-            return FrameworkUtil.createFilter(filterSpec).matches(cap.getAttributes());
-        } catch (InvalidSyntaxException ex) {
-            return false;
+        if (filterSpec != null) {
+            try {
+                if (!FrameworkUtil.createFilter(filterSpec).matches(cap.getAttributes()))
+                    return false;
+            } catch (InvalidSyntaxException ex) {
+                return false;
+            }
         }
+
+        // The mandatory attributes of the capability must be used by the filter
+        String mandatory = cap.getDirectives().get(Constants.MANDATORY_DIRECTIVE);
+        if (mandatory != null) {
+            for (String attname : mandatory.split("[,\\s]+")) {
+                if (attname.isEmpty())
+                    continue;
+                Pattern pattern = Pattern.compile("\\(\\s*" + Pattern.quote(attname) + "\\s*(=|~=|<=|>=)");
+                if (filterSpec == null || !pattern.matcher(filterSpec).find())
+                    return false;
+            }
+        }
+        return true;
     }
 
     private void transitiveDependencyClosure(XBundle bundle, Set<Bundle> closure) {

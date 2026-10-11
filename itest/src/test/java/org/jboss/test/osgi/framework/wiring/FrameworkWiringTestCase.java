@@ -29,6 +29,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -37,6 +38,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.jboss.osgi.metadata.OSGiManifestBuilder;
+import org.jboss.shrinkwrap.api.ShrinkWrap;
+import org.jboss.shrinkwrap.api.asset.Asset;
+import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.Assert;
 
 import org.jboss.osgi.testing.OSGiFrameworkTest;
@@ -338,6 +343,38 @@ public class FrameworkWiringTestCase extends OSGiFrameworkTest {
             assertSame(bundleE, caps.iterator().next().getRevision().getBundle());
         } finally {
             bundleE.uninstall();
+        }
+
+        // The capabilities of an uninstalled bundle are not found
+        String filter = "(" + IdentityNamespace.IDENTITY_NAMESPACE + "=" + bundleE.getSymbolicName() + ")";
+        assertTrue(frameworkWiring.findProviders(new TestRequirement(IdentityNamespace.IDENTITY_NAMESPACE, filter)).isEmpty());
+    }
+
+    @Test
+    public void testFindProvidersMandatoryAttribute() throws Exception {
+        FrameworkWiring frameworkWiring = getFramework().adapt(FrameworkWiring.class);
+        final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, "mandatory-exporter");
+        archive.setManifest(new Asset() {
+            public InputStream openStream() {
+                OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();
+                builder.addBundleManifestVersion(2);
+                builder.addBundleSymbolicName(archive.getName());
+                builder.addExportPackage("org.acme.mandatory;vendor=acme;mandatory:=vendor");
+                return builder.openStream();
+            }
+        });
+        Bundle bundle = installBundle(archive);
+        try {
+            // The requirement must use the mandatory attribute of the capability
+            String filter = "(" + PackageNamespace.PACKAGE_NAMESPACE + "=org.acme.mandatory)";
+            assertTrue(frameworkWiring.findProviders(new TestRequirement(PackageNamespace.PACKAGE_NAMESPACE, filter)).isEmpty());
+
+            filter = "(&(" + PackageNamespace.PACKAGE_NAMESPACE + "=org.acme.mandatory)(vendor=acme))";
+            Collection<BundleCapability> caps = frameworkWiring.findProviders(new TestRequirement(PackageNamespace.PACKAGE_NAMESPACE, filter));
+            assertEquals(1, caps.size());
+            assertSame(bundle, caps.iterator().next().getRevision().getBundle());
+        } finally {
+            bundle.uninstall();
         }
     }
 

@@ -31,7 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.jboss.osgi.framework.spi.ServiceState;
+import org.jboss.osgi.framework.spi.BundleManager;
 import org.jboss.osgi.resolver.XBundle;
 import org.osgi.dto.DTO;
 import org.osgi.framework.Bundle;
@@ -61,9 +61,11 @@ import org.osgi.resource.dto.WireDTO;
 /**
  * Creates the DTOs that a bundle can be adapted to.
  *
+ * This only uses the public bundle API, so that it also works for bundles that adapt a module.
+ *
  * @since 11-Oct-2026
  */
-final class DTOFactory {
+public final class DTOFactory {
 
     // Hide ctor
     private DTOFactory() {
@@ -75,7 +77,7 @@ final class DTOFactory {
      * @return null if the type is not a DTO type that is supported for the given bundle
      */
     @SuppressWarnings("unchecked")
-    static <T> T adapt(AbstractBundleState<?> bundle, Class<T> type) {
+    public static <T> T adapt(XBundle bundle, Class<T> type) {
         boolean uninstalled = bundle.getState() == Bundle.UNINSTALLED;
         if (type == BundleDTO.class) {
             return (T) createBundleDTO(bundle);
@@ -93,25 +95,22 @@ final class DTOFactory {
             return (T) result.toArray(new BundleRevisionDTO[result.size()]);
         } else if (type == BundleWiringDTO.class) {
             BundleWiring wiring = uninstalled ? null : bundle.adapt(BundleWiring.class);
-            return wiring != null ? (T) createBundleWiringDTO(wiring) : null;
+            return wiring != null && wiring.isInUse() ? (T) createBundleWiringDTO(wiring) : null;
         } else if (type == BundleWiringDTO[].class) {
             if (uninstalled)
                 return null;
+            // Only wirings that are in use have capabilities, requirements and wires
             List<BundleWiringDTO> result = new ArrayList<BundleWiringDTO>();
             for (BundleRevision brev : getRevisions(bundle)) {
                 BundleWiring wiring = brev.getWiring();
-                if (wiring != null)
+                if (wiring != null && wiring.isInUse())
                     result.add(createBundleWiringDTO(wiring));
             }
             return (T) result.toArray(new BundleWiringDTO[result.size()]);
         } else if (type == ServiceReferenceDTO[].class) {
             if (uninstalled)
                 return null;
-            List<ServiceReferenceDTO> result = new ArrayList<ServiceReferenceDTO>();
-            for (ServiceState<?> serviceState : bundle.getRegisteredServicesInternal()) {
-                if (!serviceState.isUnregistered())
-                    result.add(createServiceReferenceDTO(serviceState));
-            }
+            List<ServiceReferenceDTO> result = getServiceReferenceDTOs(bundle);
             return (T) result.toArray(new ServiceReferenceDTO[result.size()]);
         } else if (type == FrameworkDTO.class && bundle.getBundleId() == 0) {
             return (T) createFrameworkDTO(bundle);
@@ -127,7 +126,20 @@ final class DTOFactory {
         return null;
     }
 
-    private static List<BundleRevision> getRevisions(AbstractBundleState<?> bundle) {
+    private static List<ServiceReferenceDTO> getServiceReferenceDTOs(Bundle bundle) {
+        List<ServiceReferenceDTO> result = new ArrayList<ServiceReferenceDTO>();
+        ServiceReference<?>[] srefs = bundle.getState() != Bundle.UNINSTALLED ? bundle.getRegisteredServices() : null;
+        if (srefs != null) {
+            for (ServiceReference<?> sref : srefs) {
+                // The service may be unregistered concurrently
+                if (sref.getBundle() != null)
+                    result.add(createServiceReferenceDTO(sref));
+            }
+        }
+        return result;
+    }
+
+    private static List<BundleRevision> getRevisions(Bundle bundle) {
         BundleRevisions brevs = bundle.adapt(BundleRevisions.class);
         return brevs != null ? brevs.getRevisions() : new ArrayList<BundleRevision>();
     }
@@ -157,7 +169,8 @@ final class DTOFactory {
     private static ServiceReferenceDTO createServiceReferenceDTO(ServiceReference<?> sref) {
         ServiceReferenceDTO dto = new ServiceReferenceDTO();
         dto.id = (Long) sref.getProperty(org.osgi.framework.Constants.SERVICE_ID);
-        dto.bundle = sref.getBundle().getBundleId();
+        Bundle owner = sref.getBundle();
+        dto.bundle = owner != null ? owner.getBundleId() : -1;
         dto.properties = new HashMap<String, Object>();
         for (String key : sref.getPropertyKeys())
             dto.properties.put(key, convertValue(sref.getProperty(key)));
@@ -169,26 +182,24 @@ final class DTOFactory {
         return dto;
     }
 
-    private static FrameworkDTO createFrameworkDTO(AbstractBundleState<?> systemBundle) {
-        BundleManagerPlugin bundleManager = systemBundle.getBundleManager();
+    private static FrameworkDTO createFrameworkDTO(XBundle systemBundle) {
+        BundleManager bundleManager = systemBundle.adapt(BundleManager.class);
+        if (bundleManager == null)
+            return null;
+
         FrameworkDTO dto = new FrameworkDTO();
         dto.bundles = new ArrayList<BundleDTO>();
-        for (XBundle bundle : bundleManager.getBundles())
+        dto.services = new ArrayList<ServiceReferenceDTO>();
+        for (XBundle bundle : bundleManager.getBundles()) {
             dto.bundles.add(createBundleDTO(bundle));
+            dto.services.addAll(getServiceReferenceDTOs(bundle));
+        }
 
         dto.properties = new HashMap<String, Object>();
         for (Map.Entry<String, Object> entry : bundleManager.getProperties().entrySet()) {
             Object value = bundleManager.getProperty(entry.getKey());
             if (value != null)
                 dto.properties.put(entry.getKey(), convertValue(value));
-        }
-
-        dto.services = new ArrayList<ServiceReferenceDTO>();
-        for (XBundle bundle : bundleManager.getBundles()) {
-            for (ServiceState<?> serviceState : AbstractBundleState.assertBundleState(bundle).getRegisteredServicesInternal()) {
-                if (!serviceState.isUnregistered())
-                    dto.services.add(createServiceReferenceDTO(serviceState));
-            }
         }
         return dto;
     }
@@ -309,18 +320,27 @@ final class DTOFactory {
             dto.inUse = wiring.isInUse();
             dto.resource = getRevisionDTO(wiring.getRevision()).id;
             dto.capabilities = new ArrayList<CapabilityRefDTO>();
-            for (BundleCapability cap : wiring.getCapabilities(null))
+            // A wiring that is no longer in use returns null instead of a list
+            for (BundleCapability cap : nullSafe(wiring.getCapabilities(null)))
                 dto.capabilities.add(getCapabilityRefDTO(cap));
             dto.requirements = new ArrayList<RequirementRefDTO>();
-            for (BundleRequirement req : wiring.getRequirements(null))
+            for (BundleRequirement req : nullSafe(wiring.getRequirements(null)))
                 dto.requirements.add(getRequirementRefDTO(req));
             dto.providedWires = new ArrayList<WireDTO>();
-            for (BundleWire wire : wiring.getProvidedWires(null))
-                dto.providedWires.add(getWireDTO(wire));
+            for (BundleWire wire : nullSafe(wiring.getProvidedWires(null))) {
+                if (wire.getProviderWiring() != null && wire.getRequirerWiring() != null)
+                    dto.providedWires.add(getWireDTO(wire));
+            }
             dto.requiredWires = new ArrayList<WireDTO>();
-            for (BundleWire wire : wiring.getRequiredWires(null))
-                dto.requiredWires.add(getWireDTO(wire));
+            for (BundleWire wire : nullSafe(wiring.getRequiredWires(null))) {
+                if (wire.getProviderWiring() != null && wire.getRequirerWiring() != null)
+                    dto.requiredWires.add(getWireDTO(wire));
+            }
             return dto;
+        }
+
+        private <E> List<E> nullSafe(List<E> list) {
+            return list != null ? list : new ArrayList<E>();
         }
 
         private BundleWireDTO getWireDTO(BundleWire wire) {

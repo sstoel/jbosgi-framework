@@ -44,6 +44,7 @@ import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.osgi.framework.Services;
 import org.jboss.osgi.framework.internal.AbstractCommonBundleRevision;
+import org.jboss.osgi.framework.internal.DTOFactory;
 import org.jboss.osgi.framework.spi.LockManager.LockContext;
 import org.jboss.osgi.framework.spi.LockManager.LockableItem;
 import org.jboss.osgi.framework.spi.LockManager.Method;
@@ -202,6 +203,8 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             result = (T) getBundleRevision().getWiring();
         } else if (type.isAssignableFrom(OSGiMetaData.class)) {
             result = (T) getOSGiMetaData();
+        } else {
+            result = DTOFactory.adapt(this, type);
         }
         return result;
     }

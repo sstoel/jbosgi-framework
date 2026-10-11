@@ -124,7 +124,7 @@ final class WeavingHookProcessor implements ClassFileTransformer {
                 // Extract the dynamic package requirements
                 for (Requirement req : res.getRequirements(PackageNamespace.PACKAGE_NAMESPACE)) {
                     FallbackLoader fallbackLoader = hostRev.getFallbackLoader();
-                    fallbackLoader.addDynamicWeavingImport((XPackageRequirement) req);
+                    fallbackLoader.addDynamicWeavingImport(WeavingRequirement.create((XPackageRequirement) req, hostRev));
                 }
             } catch(RuntimeException rte) {
                 // The dynamic imports must have a valid syntax,

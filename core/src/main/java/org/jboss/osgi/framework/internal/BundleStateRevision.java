@@ -34,9 +34,11 @@ import org.jboss.osgi.framework.spi.ModuleManager;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.metadata.OSGiMetaData;
 import org.jboss.osgi.resolver.ResourceBuilderException;
+import org.jboss.osgi.resolver.XBundleCapability;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.jboss.osgi.resolver.XBundleRevisionBuilder;
 import org.jboss.osgi.resolver.XBundleRevisionBuilderFactory;
+import org.jboss.osgi.resolver.XResource;
 import org.jboss.osgi.vfs.VFSUtils;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.namespace.NativeNamespace;
@@ -75,15 +77,27 @@ abstract class BundleStateRevision extends AbstractCommonBundleRevision {
                 public XBundleRevision createResource() {
                     return brev;
                 }
+
+                @Override
+                public XBundleCapability createCapability(XResource resource, String namespace, Map<String, Object> atts, Map<String, String> dirs) {
+                    // The builder copies the attributes, the native capability needs the live view
+                    if (brev instanceof SystemBundleRevision && NativeNamespace.NATIVE_NAMESPACE.equals(namespace))
+                        atts = NativeNamespaceSupport.getCapabilityAttributes(frameworkState.getBundleManager());
+                    return super.createCapability(resource, namespace, atts, dirs);
+                }
             };
             XBundleRevisionBuilder builder = XBundleRevisionBuilderFactory.create(factory);
             builder.loadFrom(metadata);
             if (this instanceof SystemBundleRevision) {
-                Map<String, Object> atts = NativeNamespaceSupport.getCapabilityAttributes(frameworkState.getBundleManager());
-                builder.addCapability(NativeNamespace.NATIVE_NAMESPACE, atts, null);
+                builder.addCapability(NativeNamespace.NATIVE_NAMESPACE, null, null);
             } else {
                 // Frameworks must convert a Bundle-NativeCode header to a requirement in the osgi.native namespace
-                Map<String, String> dirs = NativeNamespaceSupport.getRequirementDirectives(metadata.getBundleNativeCode());
+                Map<String, String> dirs;
+                try {
+                    dirs = NativeNamespaceSupport.getRequirementDirectives(metadata.getBundleNativeCode());
+                } catch (IllegalArgumentException ex) {
+                    throw new BundleException(FrameworkMessages.MESSAGES.invalidNativeCodeHeader(this), BundleException.MANIFEST_ERROR, ex);
+                }
                 if (dirs != null)
                     builder.addRequirement(NativeNamespace.NATIVE_NAMESPACE, null, dirs);
             }

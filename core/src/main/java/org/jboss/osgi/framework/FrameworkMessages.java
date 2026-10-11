@@ -328,4 +328,7 @@ public interface FrameworkMessages {
 
     @Message(id = 11290, value = "Not allowed to provide a capability in the osgi.native namespace in: %s")
     String notAllowedToProvideNativeCapability(XBundleRevision brev);
+
+    @Message(id = 11291, value = "Invalid Bundle-NativeCode header in: %s")
+    String invalidNativeCodeHeader(XBundleRevision brev);
 }

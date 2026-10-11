@@ -21,12 +21,15 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import java.util.Set;
 import org.jboss.osgi.metadata.Parameter;
 import org.jboss.osgi.metadata.ParameterizedAttribute;
 import org.osgi.framework.Constants;
@@ -47,33 +50,56 @@ final class NativeNamespaceSupport {
     }
 
     /**
-     * The attributes of the osgi.native capability that the system bundle provides
+     * The attributes of the osgi.native capability that the system bundle provides.
+     *
+     * The framework and system properties are available to the selection filter of a native code clause.
+     * They are read when the filter is evaluated, like the framework properties themselves.
      */
-    static Map<String, Object> getCapabilityAttributes(BundleManagerPlugin bundleManager) {
-        Map<String, Object> atts = new HashMap<String, Object>();
+    static Map<String, Object> getCapabilityAttributes(final BundleManagerPlugin bundleManager) {
+        return new AbstractMap<String, Object>() {
 
-        // The framework properties are available to the selection filter
-        for (Map.Entry<String, Object> entry : bundleManager.getProperties().entrySet()) {
-            if (entry.getValue() != null)
-                atts.put(entry.getKey(), entry.getValue());
-        }
+            @Override
+            public Object get(Object key) {
+                if (NativeNamespace.CAPABILITY_OSNAME_ATTRIBUTE.equals(key))
+                    return NativeCodeImpl.getOSNames((String) bundleManager.getProperty(Constants.FRAMEWORK_OS_NAME));
+                if (NativeNamespace.CAPABILITY_PROCESSOR_ATTRIBUTE.equals(key))
+                    return NativeCodeImpl.getProcessors((String) bundleManager.getProperty(Constants.FRAMEWORK_PROCESSOR));
+                if (NativeNamespace.CAPABILITY_OSVERSION_ATTRIBUTE.equals(key)) {
+                    try {
+                        return Version.parseVersion((String) bundleManager.getProperty(Constants.FRAMEWORK_OS_VERSION));
+                    } catch (RuntimeException ex) {
+                        return Version.emptyVersion;
+                    }
+                }
+                if (NativeNamespace.CAPABILITY_LANGUAGE_ATTRIBUTE.equals(key))
+                    return bundleManager.getProperty(Constants.FRAMEWORK_LANGUAGE);
 
-        atts.put(NativeNamespace.CAPABILITY_OSNAME_ATTRIBUTE, NativeCodeImpl.getOSNames((String) bundleManager.getProperty(Constants.FRAMEWORK_OS_NAME)));
-        atts.put(NativeNamespace.CAPABILITY_PROCESSOR_ATTRIBUTE, NativeCodeImpl.getProcessors((String) bundleManager.getProperty(Constants.FRAMEWORK_PROCESSOR)));
+                return key instanceof String ? bundleManager.getProperty((String) key) : null;
+            }
 
-        Version osversion = Version.emptyVersion;
-        try {
-            osversion = Version.parseVersion((String) bundleManager.getProperty(Constants.FRAMEWORK_OS_VERSION));
-        } catch (RuntimeException ex) {
-            // ignore
-        }
-        atts.put(NativeNamespace.CAPABILITY_OSVERSION_ATTRIBUTE, osversion);
+            @Override
+            public boolean containsKey(Object key) {
+                return get(key) != null;
+            }
 
-        Object language = bundleManager.getProperty(Constants.FRAMEWORK_LANGUAGE);
-        if (language != null)
-            atts.put(NativeNamespace.CAPABILITY_LANGUAGE_ATTRIBUTE, language);
+            @Override
+            public Set<Map.Entry<String, Object>> entrySet() {
+                Map<String, Object> snapshot = new HashMap<String, Object>();
+                for (String key : bundleManager.getProperties().keySet())
+                    putIfPresent(snapshot, key);
+                putIfPresent(snapshot, NativeNamespace.CAPABILITY_OSNAME_ATTRIBUTE);
+                putIfPresent(snapshot, NativeNamespace.CAPABILITY_PROCESSOR_ATTRIBUTE);
+                putIfPresent(snapshot, NativeNamespace.CAPABILITY_OSVERSION_ATTRIBUTE);
+                putIfPresent(snapshot, NativeNamespace.CAPABILITY_LANGUAGE_ATTRIBUTE);
+                return Collections.unmodifiableSet(snapshot.entrySet());
+            }
 
-        return atts;
+            private void putIfPresent(Map<String, Object> snapshot, String key) {
+                Object value = get(key);
+                if (value != null)
+                    snapshot.put(key, value);
+            }
+        };
     }
 
     /**

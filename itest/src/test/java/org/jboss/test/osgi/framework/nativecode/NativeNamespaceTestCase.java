@@ -37,6 +37,7 @@ import org.jboss.osgi.metadata.OSGiManifestBuilder;
 import org.jboss.osgi.testing.OSGiFrameworkTest;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.asset.Asset;
+import org.jboss.shrinkwrap.api.asset.ByteArrayAsset;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
@@ -134,6 +135,56 @@ public class NativeNamespaceTestCase extends OSGiFrameworkTest {
             assertBundleState(Bundle.INSTALLED, bundle.getState());
         } finally {
             bundle.uninstall();
+        }
+    }
+
+    @Test
+    public void testSelectionFilterWithLateSystemProperty() throws Exception {
+        String osname = getSystemContext().getProperty(Constants.FRAMEWORK_OS_NAME);
+        String processor = getSystemContext().getProperty(Constants.FRAMEWORK_PROCESSOR);
+        String header = "lib/libtest.so; osname=\"" + osname + "\"; processor=\"" + processor + "\"; selection-filter=\"(native.namespace.test=foo)\"";
+
+        // The selection filter sees a system property that is set after the framework has started
+        System.setProperty("native.namespace.test", "foo");
+        try {
+            JavaArchive archive = getNativeCodeArchive("native-selection", header);
+            archive.add(new ByteArrayAsset(new byte[] { 0 }), "lib/libtest.so");
+            Bundle bundle = installBundle(archive);
+            try {
+                bundle.start();
+                assertBundleState(Bundle.ACTIVE, bundle.getState());
+                List<BundleWire> wires = bundle.adapt(BundleWiring.class).getRequiredWires(NativeNamespace.NATIVE_NAMESPACE);
+                assertEquals(1, wires.size());
+                assertEquals("foo", wires.get(0).getCapability().getAttributes().get("native.namespace.test"));
+            } finally {
+                bundle.uninstall();
+            }
+        } finally {
+            System.clearProperty("native.namespace.test");
+        }
+
+        // Without the property the clause is not selected
+        JavaArchive archive = getNativeCodeArchive("native-selection", header);
+        archive.add(new ByteArrayAsset(new byte[] { 0 }), "lib/libtest.so");
+        Bundle bundle = installBundle(archive);
+        try {
+            bundle.start();
+            fail("BundleException expected");
+        } catch (BundleException ex) {
+            assertBundleState(Bundle.INSTALLED, bundle.getState());
+        } finally {
+            bundle.uninstall();
+        }
+    }
+
+    @Test
+    public void testInvalidOSVersion() throws Exception {
+        try {
+            Bundle bundle = installBundle(getNativeCodeArchive("native-osversion", "lib/a.so; osname=Linux; processor=x86; osversion=\"[not.a.version\""));
+            bundle.uninstall();
+            fail("BundleException expected");
+        } catch (BundleException ex) {
+            assertEquals(BundleException.MANIFEST_ERROR, ex.getType());
         }
     }
 
