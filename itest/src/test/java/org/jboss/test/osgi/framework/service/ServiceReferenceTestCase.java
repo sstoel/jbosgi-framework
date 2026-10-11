@@ -212,6 +212,7 @@ public class ServiceReferenceTestCase extends OSGiFrameworkTest {
             actual.add(key);
 
         expected.add(Constants.SERVICE_BUNDLEID);
+        expected.add(Constants.SERVICE_SCOPE);
         assertEquals(expected, actual);
     }
 

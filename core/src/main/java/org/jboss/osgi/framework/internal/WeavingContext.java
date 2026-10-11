@@ -23,6 +23,10 @@ package org.jboss.osgi.framework.internal;
 
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -35,11 +39,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.jboss.osgi.framework.spi.FrameworkEvents;
+import org.jboss.osgi.resolver.XBundle;
+import org.jboss.osgi.resolver.XBundleRevision;
+import org.jboss.osgi.resolver.XPackageRequirement;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
+import org.osgi.framework.hooks.weaving.WovenClassListener;
+import org.osgi.framework.namespace.PackageNamespace;
+import org.osgi.framework.wiring.BundleRequirement;
 import org.osgi.framework.wiring.BundleWiring;
 
 /**
@@ -140,7 +153,7 @@ class WeavingContext {
         private final String className;
         private Class<?> redefinedClass;
         private ProtectionDomain protectionDomain;
-        private boolean complete;
+        private boolean frozen;
         private byte[] classfileBuffer;
         private int state;
 
@@ -159,25 +172,89 @@ class WeavingContext {
 
         @Override
         public void setBytes(byte[] newBytes) {
-            assertNotComplete();
+            assertNotFrozen();
             this.classfileBuffer = newBytes;
         }
 
         @Override
         public List<String> getDynamicImports() {
-            return complete ? Collections.unmodifiableList(weavingImports) : weavingImports;
+            return frozen ? Collections.unmodifiableList(weavingImports) : weavingImports;
         }
 
         @Override
         public boolean isWeavingComplete() {
-            return complete;
+            return state == DEFINED || state == DEFINE_FAILED || state == TRANSFORMING_FAILED;
         }
 
-        void markComplete() {
-            if (complete == false) {
-                classfileBuffer = Arrays.copyOf(classfileBuffer, classfileBuffer.length);
-                complete = true;
+        /**
+         * All weaving hooks have been called. The class bytes and dynamic imports can no longer be changed.
+         */
+        void markTransformed() {
+            if (state == TRANSFORMING) {
+                freeze();
                 state = TRANSFORMED;
+                notifyListeners();
+            }
+        }
+
+        void markTransformingFailed() {
+            if (state == TRANSFORMING) {
+                freeze();
+                state = TRANSFORMING_FAILED;
+                notifyListeners();
+            }
+        }
+
+        void markDefined(Class<?> definedClass) {
+            if (state == TRANSFORMING || state == TRANSFORMED) {
+                freeze();
+                this.protectionDomain = definedClass.getProtectionDomain();
+                this.redefinedClass = definedClass;
+                state = DEFINED;
+                notifyListeners();
+            }
+        }
+
+        void markDefineFailed() {
+            if (state == TRANSFORMING || state == TRANSFORMED) {
+                freeze();
+                state = DEFINE_FAILED;
+                notifyListeners();
+            }
+        }
+
+        private void freeze() {
+            if (frozen == false) {
+                classfileBuffer = Arrays.copyOf(classfileBuffer, classfileBuffer.length);
+                frozen = true;
+            }
+        }
+
+        private void notifyListeners() {
+            BundleManagerPlugin bundleManager = hostState.getBundleManager();
+            BundleContext syscontext = bundleManager.getSystemContext();
+            Collection<ServiceReference<WovenClassListener>> srefs = null;
+            try {
+                srefs = syscontext.getServiceReferences(WovenClassListener.class, null);
+            } catch (InvalidSyntaxException e) {
+                // ignore
+            }
+            if (srefs == null)
+                return;
+
+            for (ServiceReference<WovenClassListener> sref : srefs) {
+                WovenClassListener listener = syscontext.getService(sref);
+                if (listener == null)
+                    continue;
+                try {
+                    listener.modified(this);
+                } catch (Throwable th) {
+                    // A listener cannot fail the class load
+                    FrameworkEvents frameworkEvents = hostState.getFrameworkState().getFrameworkEvents();
+                    frameworkEvents.fireFrameworkEvent((XBundle) sref.getBundle(), FrameworkEvent.ERROR, th, (FrameworkListener[]) null);
+                } finally {
+                    syscontext.ungetService(sref);
+                }
             }
         }
 
@@ -191,24 +268,47 @@ class WeavingContext {
             return protectionDomain;
         }
 
-        void setProtectionDomain(ProtectionDomain protectionDomain) {
-            assertNotComplete();
-            this.protectionDomain = protectionDomain;
-        }
-
         @Override
         public Class<?> getDefinedClass() {
             return redefinedClass;
         }
 
-        void setDefinedClass(Class<?> definedClass) {
-            assertNotComplete();
-            this.redefinedClass = definedClass;
-        }
-
+        /**
+         * The wiring of the bundle, which includes the dynamic imports that the weaving hooks have added.
+         */
         @Override
         public BundleWiring getBundleWiring() {
-            return hostState.adapt(BundleWiring.class);
+            final BundleWiring wiring = hostState.adapt(BundleWiring.class);
+            XBundleRevision brev = hostState.getBundleRevision();
+            final FallbackLoader fallbackLoader = brev instanceof HostBundleRevision ? ((HostBundleRevision) brev).getFallbackLoader() : null;
+            if (wiring == null || fallbackLoader == null)
+                return wiring;
+
+            InvocationHandler handler = new InvocationHandler() {
+                @Override
+                @SuppressWarnings("unchecked")
+                public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                    Object result;
+                    try {
+                        result = method.invoke(wiring, args);
+                    } catch (InvocationTargetException ex) {
+                        throw ex.getCause();
+                    }
+                    if (result != null && method.getName().equals("getRequirements")) {
+                        String namespace = (String) args[0];
+                        if (namespace == null || PackageNamespace.PACKAGE_NAMESPACE.equals(namespace)) {
+                            List<BundleRequirement> reqs = new ArrayList<BundleRequirement>((List<BundleRequirement>) result);
+                            for (XPackageRequirement req : fallbackLoader.getDynamicWeavingImports()) {
+                                if (!reqs.contains(req))
+                                    reqs.add((BundleRequirement) req);
+                            }
+                            result = Collections.unmodifiableList(reqs);
+                        }
+                    }
+                    return result;
+                }
+            };
+            return (BundleWiring) Proxy.newProxyInstance(BundleWiring.class.getClassLoader(), new Class<?>[] { BundleWiring.class }, handler);
         }
 
         @Override
@@ -216,8 +316,8 @@ class WeavingContext {
             return state;
         }
 
-        private void assertNotComplete() {
-            if (complete)
+        private void assertNotFrozen() {
+            if (frozen)
                 throw MESSAGES.illegalStateWeavingAlreadyComplete(className);
         }
     }

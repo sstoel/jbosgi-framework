@@ -150,10 +150,13 @@ final class FrameworkProxy implements Framework {
             bundleManager.setFramework(this);
 
         } catch (BundleException ex) {
-            bundleManager.setManagerState(Bundle.INSTALLED);
+            if (bundleManager != null)
+                bundleManager.setManagerState(Bundle.INSTALLED);
             throw ex;
         } catch (Throwable ex) {
-            bundleManager.setManagerState(Bundle.INSTALLED);
+            // The bundle manager is not available when the framework services cannot be created
+            if (bundleManager != null)
+                bundleManager.setManagerState(Bundle.INSTALLED);
             throw MESSAGES.cannotInitializeFramework(ex);
         } finally {
             firstInit = false;

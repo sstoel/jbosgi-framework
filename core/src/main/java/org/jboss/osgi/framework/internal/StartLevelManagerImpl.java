@@ -234,6 +234,8 @@ public final class StartLevelManagerImpl implements StartLevelManager {
             throw MESSAGES.illegalArgumentNull("bundle");
         if (bundle.getBundleId() == 0)
             throw MESSAGES.illegalArgumentStartLevelOnSystemBundles();
+        if (level <= 0)
+            throw MESSAGES.illegalArgumentInvalidStartLevel(level);
 
         final XBundle hostBundle = bundle;
         getBundleStartLevelState(bundle).setLevel(level);

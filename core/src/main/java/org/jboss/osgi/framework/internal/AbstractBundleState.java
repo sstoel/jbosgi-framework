@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Dictionary;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.List;
 import java.util.Locale;
@@ -91,6 +92,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
     private final AtomicInteger bundleState = new AtomicInteger(INSTALLED);
     private final List<ServiceState<?>> registeredServices = new CopyOnWriteArrayList<ServiceState<?>>();
     private final ConcurrentHashMap<ServiceState<?>, AtomicInteger> usedServices = new ConcurrentHashMap<ServiceState<?>, AtomicInteger>();
+    private final Set<ServiceState<?>> usedPrototypeServices = ConcurrentHashMap.newKeySet();
 
     private AbstractBundleContext<? extends AbstractBundleState<?>> bundleContext;
     private Exception lastResolverException;
@@ -186,6 +188,8 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
             result = (T) getStorageState();
         } else if (type.isAssignableFrom(BundleManager.class)) {
             result = (T) getBundleManager();
+        } else {
+            result = DTOFactory.adapt(this, type);
         }
         return result;
     }
@@ -337,7 +341,21 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
     }
 
     Set<ServiceState<?>> getServicesInUseInternal() {
-        return Collections.unmodifiableSet(usedServices.keySet());
+        Set<ServiceState<?>> result = new HashSet<ServiceState<?>>(usedServices.keySet());
+        result.addAll(usedPrototypeServices);
+        return Collections.unmodifiableSet(result);
+    }
+
+    boolean hasServiceUseCount(ServiceState<?> serviceState) {
+        return usedServices.containsKey(serviceState);
+    }
+
+    void addPrototypeServiceInUse(ServiceState<?> serviceState) {
+        usedPrototypeServices.add(serviceState);
+    }
+
+    void removePrototypeServiceInUse(ServiceState<?> serviceState) {
+        usedPrototypeServices.remove(serviceState);
     }
 
     void addServiceInUse(ServiceState<?> serviceState) {

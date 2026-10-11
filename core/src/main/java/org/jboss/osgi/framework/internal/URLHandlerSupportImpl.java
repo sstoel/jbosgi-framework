@@ -41,6 +41,7 @@ import java.util.Hashtable;
 import java.util.List;
 
 import org.jboss.osgi.framework.spi.URLHandlerSupport;
+import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.ServiceRegistration;
@@ -216,17 +217,36 @@ final class URLHandlerSupportImpl implements URLHandlerSupport {
      * @see java.net.URLStreamHandler
      */
     @Override
-    public ContentHandler createContentHandler(String mimetype) {
-        List<ServiceReference<ContentHandler>> refList = contentHandlerDelegate.getContentHandlers(mimetype);
-        if (refList == null || refList.isEmpty())
+    public ContentHandler createContentHandler(final String mimetype) {
+        // No content handler was ever registered for this mime type
+        if (contentHandlerDelegate.getContentHandlers(mimetype) == null)
             return null;
 
-        ServiceReference<ContentHandler> ref = refList.get(0);
-        Object service = ref.getBundle().getBundleContext().getService(ref);
-        if (service instanceof ContentHandler)
-            return (ContentHandler) service;
+        // The JVM caches its default content handler when this factory returns null and does not ask again.
+        // Return a handler that finds the registered service on every call instead.
+        return new ContentHandler() {
 
-        return null;
+            @Override
+            public Object getContent(URLConnection urlc) throws IOException {
+                ContentHandler handler = getRegisteredContentHandler(mimetype);
+                return handler != null ? handler.getContent(urlc) : urlc.getInputStream();
+            }
+
+            @Override
+            @SuppressWarnings("rawtypes")
+            public Object getContent(URLConnection urlc, Class[] classes) throws IOException {
+                ContentHandler handler = getRegisteredContentHandler(mimetype);
+                return handler != null ? handler.getContent(urlc, classes) : super.getContent(urlc, classes);
+            }
+        };
+    }
+
+    private ContentHandler getRegisteredContentHandler(String mimetype) {
+        ServiceReference<ContentHandler> ref = contentHandlerDelegate.getContentHandler(mimetype);
+        Bundle bundle = ref != null ? ref.getBundle() : null;
+        BundleContext context = bundle != null ? bundle.getBundleContext() : null;
+        Object service = context != null ? context.getService(ref) : null;
+        return service instanceof ContentHandler ? (ContentHandler) service : null;
     }
 
     /**

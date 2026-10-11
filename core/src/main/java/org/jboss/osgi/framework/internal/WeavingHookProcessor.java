@@ -85,13 +85,15 @@ final class WeavingHookProcessor implements ClassFileTransformer {
                     context.blacklist(hookreg.sref);
                     iterator.remove();
                 }
-                wovenClass.markComplete();
+                wovenClass.markTransformingFailed();
                 BundleReferenceClassLoader<?> bref = (BundleReferenceClassLoader<?>) hook.getClass().getClassLoader();
                 frameworkEvents.fireFrameworkEvent(bref.getBundleState(), FrameworkEvent.ERROR, rte, (FrameworkListener[]) null);
                 throw rte;
             }
         }
 
+        // The listeners see the woven class before the dynamic imports are added to the wiring
+        wovenClass.markTransformed();
         addDynamicWeavingImports(wovenClass);
 
         return wovenClass.getBytes();

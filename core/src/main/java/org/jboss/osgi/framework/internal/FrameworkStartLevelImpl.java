@@ -21,6 +21,8 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
+
 import org.jboss.osgi.framework.spi.FrameworkStartLevelSupport;
 import org.jboss.osgi.framework.spi.StartLevelManager;
 import org.jboss.osgi.resolver.XBundle;
@@ -55,6 +57,8 @@ public final class FrameworkStartLevelImpl implements FrameworkStartLevelSupport
 
     @Override
     public void setStartLevel(int startlevel, FrameworkListener... listeners) {
+        if (startlevel <= 0)
+            throw MESSAGES.illegalArgumentInvalidStartLevel(startlevel);
         startLevelSupport.setFrameworkStartLevel(startlevel, listeners);
     }
 
@@ -70,6 +74,8 @@ public final class FrameworkStartLevelImpl implements FrameworkStartLevelSupport
 
     @Override
     public void setInitialBundleStartLevel(int startlevel) {
+        if (startlevel <= 0)
+            throw MESSAGES.illegalArgumentInvalidStartLevel(startlevel);
         startLevelSupport.setInitialBundleStartLevel(startlevel);
     }
 }

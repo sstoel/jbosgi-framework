@@ -258,6 +258,10 @@ abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implement
     }
 
     private void callFindHooks(Collection<Bundle> bundles) {
+        // The hooks are called for the system bundle context, but they cannot hide bundles from it
+        if (bundleState.getBundleId() == 0)
+            bundles = new RemoveOnlyCollection<Bundle>(new ArrayList<Bundle>(bundles));
+
         Collection<ServiceReference<FindHook>> srefs = null;
         try {
             srefs = getServiceReferences(FindHook.class, null);
@@ -467,8 +471,14 @@ abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implement
     }
 
     @Override
-    public <S> ServiceObjects<S> getServiceObjects(final ServiceReference<S> serviceReference) {
-        return new ServiceObjectsImpl(serviceReference);
+    public <S> ServiceObjects<S> getServiceObjects(final ServiceReference<S> sref) {
+        if (sref == null)
+            throw MESSAGES.illegalArgumentNull("sref");
+        asertNotDestroyed();
+        ServiceState<?> serviceState = ServiceStateImpl.assertServiceState(sref);
+        if (serviceState.isUnregistered())
+            return null;
+        return new ServiceObjectsImpl<S>(sref);
     }
 
     @Override
@@ -507,26 +517,45 @@ abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implement
     }
 
     class ServiceObjectsImpl<S> implements ServiceObjects<S> {
-        private final ServiceReference<S> m_ref;
+        private final ServiceReference<S> sref;
+        private final ServiceStateImpl<S> serviceState;
 
-        public ServiceObjectsImpl(final ServiceReference<S> ref)
-        {
-            this.m_ref = ref;
+        @SuppressWarnings("unchecked")
+        ServiceObjectsImpl(ServiceReference<S> sref) {
+            this.sref = sref;
+            this.serviceState = ServiceStateImpl.assertServiceState(sref);
         }
 
         @Override
         public S getService() {
-            return AbstractBundleContext.this.getService(m_ref);
+            asertNotDestroyed();
+            if (serviceState.isUnregistered())
+                return null;
+            if (serviceState.isPrototypeScope() == false)
+                return AbstractBundleContext.this.getService(sref);
+            return serviceState.getPrototypeValue(bundleState);
         }
 
         @Override
-        public void ungetService(final S s) {
-            AbstractBundleContext.this.ungetService(m_ref);
+        public void ungetService(S service) {
+            asertNotDestroyed();
+            if (service == null)
+                throw MESSAGES.illegalArgumentNull("service");
+            if (serviceState.isUnregistered())
+                return;
+            if (serviceState.isPrototypeScope()) {
+                if (serviceState.ungetPrototypeValue(bundleState, service) == false)
+                    throw MESSAGES.illegalArgumentInvalidServiceObject(service);
+            } else {
+                if (bundleState.hasServiceUseCount(serviceState) == false || serviceState.isScopedValueInUse(bundleState, service) == false)
+                    throw MESSAGES.illegalArgumentInvalidServiceObject(service);
+                AbstractBundleContext.this.ungetService(sref);
+            }
         }
 
         @Override
         public ServiceReference<S> getServiceReference() {
-            return m_ref;
+            return sref;
         }
     }
 }

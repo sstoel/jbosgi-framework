@@ -22,6 +22,7 @@
 package org.jboss.osgi.framework.internal;
 
 import java.util.Dictionary;
+import java.util.Map;
 
 import org.jboss.modules.Module;
 import org.jboss.modules.ModuleClassLoader;
@@ -38,6 +39,7 @@ import org.jboss.osgi.resolver.XBundleRevisionBuilder;
 import org.jboss.osgi.resolver.XBundleRevisionBuilderFactory;
 import org.jboss.osgi.vfs.VFSUtils;
 import org.osgi.framework.BundleException;
+import org.osgi.framework.namespace.NativeNamespace;
 
 /**
  * An abstract bundle revision.
@@ -75,7 +77,17 @@ abstract class BundleStateRevision extends AbstractCommonBundleRevision {
                 }
             };
             XBundleRevisionBuilder builder = XBundleRevisionBuilderFactory.create(factory);
-            builder.loadFrom(metadata).getResource();
+            builder.loadFrom(metadata);
+            if (this instanceof SystemBundleRevision) {
+                Map<String, Object> atts = NativeNamespaceSupport.getCapabilityAttributes(frameworkState.getBundleManager());
+                builder.addCapability(NativeNamespace.NATIVE_NAMESPACE, atts, null);
+            } else {
+                // Frameworks must convert a Bundle-NativeCode header to a requirement in the osgi.native namespace
+                Map<String, String> dirs = NativeNamespaceSupport.getRequirementDirectives(metadata.getBundleNativeCode());
+                if (dirs != null)
+                    builder.addRequirement(NativeNamespace.NATIVE_NAMESPACE, null, dirs);
+            }
+            builder.getResource();
         } catch (ResourceBuilderException ex) {
             throw new BundleException(ex.getMessage(), ex);
         }

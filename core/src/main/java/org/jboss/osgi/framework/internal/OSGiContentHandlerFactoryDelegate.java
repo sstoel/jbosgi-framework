@@ -69,6 +69,16 @@ final class OSGiContentHandlerFactoryDelegate implements ContentHandlerFactory {
         }
     }
 
+    /**
+     * Get the highest ranked content handler for the given mime type or null
+     */
+    ServiceReference<ContentHandler> getContentHandler(String mimetype) {
+        synchronized (contentHandlers) {
+            List<ServiceReference<ContentHandler>> list = contentHandlers.get(mimetype);
+            return list != null && !list.isEmpty() ? list.get(0) : null;
+        }
+    }
+
     void removeHandler(ServiceReference<ContentHandler> reference) {
         synchronized (contentHandlers) {
             for (List<ServiceReference<ContentHandler>> list : contentHandlers.values()) {

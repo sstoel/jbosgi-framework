@@ -46,8 +46,10 @@
                 <include>*:jboss-logging:jar</include>
                 <include>*:jboss-modules:jar</include>
                 <include>*:jboss-msc:jar</include>
+                <include>*:jboss-threads:jar</include>
                 <include>*:jboss-vfs:jar</include>
                 <include>*:org.osgi.core:jar</include>
+                <include>io.smallrye.common:*:jar</include>
             </includes>
             <useStrictFiltering>true</useStrictFiltering>
             <scope>compile</scope>

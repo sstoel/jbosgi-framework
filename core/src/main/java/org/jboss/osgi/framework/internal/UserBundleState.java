@@ -29,10 +29,12 @@ import java.io.InputStream;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Dictionary;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,12 +50,14 @@ import org.jboss.osgi.framework.spi.DeploymentProvider;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.IntegrationConstants;
 import org.jboss.osgi.framework.spi.ModuleManager;
+import org.jboss.osgi.framework.spi.ServiceManager;
 import org.jboss.osgi.framework.spi.ServiceState;
 import org.jboss.osgi.framework.spi.StartLevelManager;
 import org.jboss.osgi.framework.spi.StorageManager;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.metadata.ActivationPolicyMetaData;
 import org.jboss.osgi.metadata.OSGiMetaData;
+import org.jboss.osgi.metadata.OSGiMetaDataBuilder;
 import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.jboss.osgi.resolver.XWiringSupport;
@@ -69,10 +73,12 @@ import org.osgi.framework.BundleException;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.Version;
 import org.osgi.framework.hooks.bundle.CollisionHook;
+import org.osgi.framework.namespace.ExecutionEnvironmentNamespace;
 import org.osgi.framework.startlevel.BundleStartLevel;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleRevisions;
 import org.osgi.framework.wiring.BundleWiring;
+import org.osgi.resource.Capability;
 import org.osgi.resource.Wire;
 
 /**
@@ -739,7 +745,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             String frameworkEnvProp = (String) getBundleManager().getProperty(Constants.FRAMEWORK_EXECUTIONENVIRONMENT);
             List<String> availableEnvs = Arrays.asList(frameworkEnvProp.split("[,\\s]+"));
             for (String aux : requiredEnvs) {
-                if (availableEnvs.contains(aux)) {
+                if (availableEnvs.contains(aux) || isSystemExecutionEnvironment(aux)) {
                     foundSupportedEnv = true;
                     break;
                 }
@@ -786,6 +792,28 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return startLevelPlugin.getBundleStartLevel(this) <= startLevelPlugin.getFrameworkStartLevel();
     }
 
+    /**
+     * True if the system bundle provides the given execution environment as an osgi.ee capability
+     */
+    private boolean isSystemExecutionEnvironment(String execEnv) {
+        StringBuffer namepart = new StringBuffer();
+        StringBuffer versionpart = new StringBuffer();
+        OSGiMetaDataBuilder.convertExecutionEnvironmentHeader(execEnv, namepart, versionpart);
+        XBundleRevision sysrev = getBundleManager().getSystemBundle().getBundleRevision();
+        for (Capability cap : sysrev.getCapabilities(ExecutionEnvironmentNamespace.EXECUTION_ENVIRONMENT_NAMESPACE)) {
+            Map<String, Object> atts = cap.getAttributes();
+            if (namepart.toString().equals(atts.get(ExecutionEnvironmentNamespace.EXECUTION_ENVIRONMENT_NAMESPACE)) == false)
+                continue;
+            if (versionpart.length() == 0)
+                return true;
+            Version version = Version.parseVersion(versionpart.toString());
+            Object capVersion = atts.get(ExecutionEnvironmentNamespace.CAPABILITY_VERSION_ATTRIBUTE);
+            if (version.equals(capVersion) || (capVersion instanceof Collection && ((Collection<?>) capVersion).contains(version)))
+                return true;
+        }
+        return false;
+    }
+
     private boolean isBundleActivationPolicyUsed() {
         StorageState storageState = getStorageState();
         return storageState.isBundleActivationPolicyUsed();
@@ -796,6 +824,13 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         // Any services used by this bundle must be released.
         for (ServiceState<?> serviceState : getRegisteredServicesInternal()) {
             serviceState.unregisterInternal();
+        }
+        ServiceManager serviceManager = getFrameworkState().getServiceManagerPlugin();
+        for (ServiceState<?> serviceState : getServicesInUseInternal()) {
+            while (serviceManager.ungetService(this, serviceState)) {
+            }
+            ((ServiceStateImpl<?>) serviceState).releasePrototypeValues(this);
+            serviceState.removeUsingBundle(this);
         }
 
         // Any listeners registered by this bundle must be removed

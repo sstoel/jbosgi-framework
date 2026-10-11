@@ -117,6 +117,7 @@ final class FrameworkResolverImpl implements XResolver {
             throw MESSAGES.illegalStateResolverHookCannotTriggerResolveOperation();
 
         XEnvironment env = resolveContext.getEnvironment();
+        XEnvironment resolveEnv = new NativeNamespaceEnvironment(env, bundleManager);
         BundleContext syscontext = bundleManager.getSystemContext();
         Collection<Resource> manres = new HashSet<Resource>(resolveContext.getMandatoryResources());
         Collection<Resource> optres = new HashSet<Resource>(resolveContext.getOptionalResources());
@@ -147,10 +148,10 @@ final class FrameworkResolverImpl implements XResolver {
                         return result;
                     }
                 });
-                resolveContext = resolver.createResolveContext(env, getFilteredResources(hookregs, manres), getFilteredResources(hookregs, optres));
+                resolveContext = resolver.createResolveContext(resolveEnv, getFilteredResources(hookregs, manres), getFilteredResources(hookregs, optres));
             } else {
                 filterSingletons(manres, optres);
-                resolveContext = resolver.createResolveContext(env, manres, optres);
+                resolveContext = resolver.createResolveContext(resolveEnv, manres, optres);
             }
 
             Map<Resource, List<Wire>> wiremap;

@@ -39,6 +39,7 @@ import org.jboss.osgi.metadata.ParameterizedAttribute;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.Constants;
+import org.osgi.framework.namespace.NativeNamespace;
 
 /**
  * A bundle validator for OSGi R4.
@@ -110,6 +111,12 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
             String specificationAttr = packageAttr.getAttributeValue(Constants.PACKAGE_SPECIFICATION_VERSION, String.class);
             if (versionAttr != null && specificationAttr != null && versionAttr.equals(specificationAttr) == false)
                 throw MESSAGES.packageVersionAndSpecificationVersionMissmatch(packageName, brev);
+        }
+
+        // Only the system bundle provides capabilities in the osgi.native namespace
+        for (ParameterizedAttribute capAttr : metadata.getProvidedCapabilities()) {
+            if (NativeNamespace.NATIVE_NAMESPACE.equals(capAttr.getAttribute()))
+                throw new BundleException(MESSAGES.notAllowedToProvideNativeCapability(brev), BundleException.MANIFEST_ERROR);
         }
 
         // Verify Fragment-Host header

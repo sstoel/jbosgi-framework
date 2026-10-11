@@ -312,6 +312,8 @@ public final class ServiceManagerImpl implements ServiceManager {
             for (XBundle bundle : serviceState.getUsingBundlesInternal()) {
                 while (ungetService(bundle, serviceState)) {
                 }
+                ((ServiceStateImpl<?>) serviceState).releasePrototypeValues(bundle);
+                serviceState.removeUsingBundle(bundle);
             }
 
             // Remove from owner bundle
@@ -335,7 +337,7 @@ public final class ServiceManagerImpl implements ServiceManager {
         AbstractBundleState<?> bundleState = AbstractBundleState.assertBundleState(bundle);
         serviceState.ungetScopedValue(bundleState);
         int useCount = bundleState.removeServiceInUse(serviceState);
-        if (useCount == 0)
+        if (useCount == 0 && !((ServiceStateImpl<?>) serviceState).hasPrototypeValues(bundleState))
             serviceState.removeUsingBundle(bundleState);
 
         return useCount >= 0;
@@ -382,6 +384,10 @@ public final class ServiceManagerImpl implements ServiceManager {
                 LOGGER.warnErrorWhileCallingFindHook(ex, hook);
             }
         }
+
+        // The hooks are called for the system bundle context, but they cannot hide services from it
+        if (bundle.getBundleId() == 0)
+            return serviceStates;
 
         List<ServiceState<?>> result = new ArrayList<ServiceState<?>>();
         for (ServiceReference<?> aux : hookParam) {

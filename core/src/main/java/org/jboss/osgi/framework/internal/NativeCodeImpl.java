@@ -144,6 +144,34 @@ public final class NativeCodeImpl implements NativeCode {
                 "Windows2003", "WindowsVista", "Windows7", "Windows8", "WindowsServer2008", "WindowsServer2012" });
     }
 
+    /**
+     * The values of the osgi.native.osname attribute for the given framework os name
+     */
+    static List<String> getOSNames(String fwOSName) {
+        List<String> result = new ArrayList<String>();
+        if (fwOSName != null) {
+            result.add(fwOSName);
+            String[] canonicalNames = osAlias.get(fwOSName);
+            if (canonicalNames != null)
+                result.addAll(Arrays.asList(canonicalNames));
+        }
+        return result;
+    }
+
+    /**
+     * The values of the osgi.native.processor attribute for the given framework processor
+     */
+    static List<String> getProcessors(String fwProcessor) {
+        List<String> result = new ArrayList<String>();
+        if (fwProcessor != null) {
+            result.add(fwProcessor);
+            String canonicalName = processorAlias.get(fwProcessor);
+            if (canonicalName != null)
+                result.add(canonicalName);
+        }
+        return result;
+    }
+
     private final BundleManagerPlugin bundleManager;
 
     public NativeCodeImpl(BundleManager bundleManager) {

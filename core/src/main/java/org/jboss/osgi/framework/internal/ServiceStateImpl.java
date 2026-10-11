@@ -33,6 +33,7 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
+    import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +48,7 @@ import org.jboss.osgi.spi.ConstantsHelper;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.Constants;
 import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.PrototypeServiceFactory;
 import org.osgi.framework.ServiceEvent;
 import org.osgi.framework.ServiceException;
 import org.osgi.framework.ServiceFactory;
@@ -72,6 +74,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private ServiceRegistration<S> registration;
     private Set<XBundle> usingBundles;
     private Map<Long, ServiceFactoryHolder<S>> factoryValues;
+    private Map<Long, Set<S>> prototypeValues;
 
     // The properties
     private CaseInsensitiveDictionary prevProperties;
@@ -99,6 +102,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         properties.put(Constants.SERVICE_ID, serviceId);
         properties.put(Constants.OBJECTCLASS, classNames);
         properties.put(Constants.SERVICE_BUNDLEID, owner.getBundleId());
+        properties.put(Constants.SERVICE_SCOPE, getServiceScope());
         this.currProperties = new CaseInsensitiveDictionary(properties);
 
         // Create the {@link ServiceRegistration} and {@link ServiceReference}
@@ -171,6 +175,123 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         }
     }
 
+    private String getServiceScope() {
+        Object value = valueProvider.getValue();
+        if (value instanceof PrototypeServiceFactory)
+            return Constants.SCOPE_PROTOTYPE;
+        if (valueProvider.isFactoryValue())
+            return Constants.SCOPE_BUNDLE;
+        return Constants.SCOPE_SINGLETON;
+    }
+
+    boolean isPrototypeScope() {
+        return valueProvider.getValue() instanceof PrototypeServiceFactory;
+    }
+
+    /**
+     * True if the given value is the service object that the bundle currently holds through {@link #getScopedValue(XBundle)}
+     */
+    boolean isScopedValueInUse(XBundle bundle, Object value) {
+        if (valueProvider.isFactoryValue() == false)
+            return value == valueProvider.getValue();
+
+        synchronized (this) {
+            ServiceFactoryHolder<S> factoryHolder = getFactoryHolder(bundle);
+            return factoryHolder != null && factoryHolder.useCount.get() > 0 && factoryHolder.value == value;
+        }
+    }
+
+    /**
+     * Get a new service object from the {@link PrototypeServiceFactory}
+     */
+    @SuppressWarnings("unchecked")
+    S getPrototypeValue(XBundle bundle) {
+        PrototypeServiceFactory<S> factory = (PrototypeServiceFactory<S>) valueProvider.getValue();
+        S result;
+        try {
+            result = factory.getService(bundle, getRegistration());
+        } catch (Throwable th) {
+            ServiceException sex = new ServiceException("Cannot get factory value", ServiceException.FACTORY_EXCEPTION, th);
+            serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, sex);
+            return null;
+        }
+        if (result == null || checkValidClassNames(ownerBundle, classNames, result) == false) {
+            ServiceException sex = new ServiceException("Cannot get factory value", ServiceException.FACTORY_ERROR);
+            serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, sex);
+            return null;
+        }
+        synchronized (this) {
+            if (prototypeValues == null)
+                prototypeValues = new HashMap<Long, Set<S>>();
+
+            Set<S> values = prototypeValues.get(bundle.getBundleId());
+            if (values == null) {
+                values = Collections.newSetFromMap(new IdentityHashMap<S, Boolean>());
+                prototypeValues.put(bundle.getBundleId(), values);
+            }
+            values.add(result);
+        }
+        AbstractBundleState.assertBundleState(bundle).addPrototypeServiceInUse(this);
+        addUsingBundle(bundle);
+        return result;
+    }
+
+    /**
+     * Release a service object that was obtained from {@link #getPrototypeValue(XBundle)}
+     *
+     * @return false if the given value is not a prototype service object held by the bundle
+     */
+    boolean ungetPrototypeValue(XBundle bundle, S value) {
+        synchronized (this) {
+            Set<S> values = prototypeValues != null ? prototypeValues.get(bundle.getBundleId()) : null;
+            if (values == null || values.remove(value) == false)
+                return false;
+
+            if (values.isEmpty())
+                prototypeValues.remove(bundle.getBundleId());
+        }
+        ungetPrototypeValueInternal(bundle, value);
+        if (hasPrototypeValues(bundle) == false) {
+            AbstractBundleState<?> bundleState = AbstractBundleState.assertBundleState(bundle);
+            bundleState.removePrototypeServiceInUse(this);
+            if (bundleState.hasServiceUseCount(this) == false)
+                removeUsingBundle(bundle);
+        }
+        return true;
+    }
+
+    /**
+     * Release all prototype service objects held by the given bundle
+     */
+    void releasePrototypeValues(XBundle bundle) {
+        Set<S> values;
+        synchronized (this) {
+            values = prototypeValues != null ? prototypeValues.remove(bundle.getBundleId()) : null;
+        }
+        if (values != null) {
+            for (S value : values)
+                ungetPrototypeValueInternal(bundle, value);
+        }
+        AbstractBundleState.assertBundleState(bundle).removePrototypeServiceInUse(this);
+    }
+
+    boolean hasPrototypeValues(XBundle bundle) {
+        synchronized (this) {
+            return prototypeValues != null && prototypeValues.containsKey(bundle.getBundleId());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void ungetPrototypeValueInternal(XBundle bundle, S value) {
+        PrototypeServiceFactory<S> factory = (PrototypeServiceFactory<S>) valueProvider.getValue();
+        try {
+            factory.ungetService(bundle, getRegistration(), value);
+        } catch (RuntimeException rte) {
+            ServiceException sex = new ServiceException("Cannot unget factory value", ServiceException.FACTORY_EXCEPTION, rte);
+            serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.WARNING, sex);
+        }
+    }
+
     private ServiceFactoryHolder<S> getFactoryHolder(XBundle bundle) {
         return factoryValues != null ? factoryValues.get(bundle.getBundleId()) : null;
     }
@@ -237,6 +358,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         properties.put(Constants.SERVICE_ID, currProperties.get(Constants.SERVICE_ID));
         properties.put(Constants.OBJECTCLASS, currProperties.get(Constants.OBJECTCLASS));
         properties.put(Constants.SERVICE_BUNDLEID, currProperties.get(Constants.SERVICE_BUNDLEID));
+        properties.put(Constants.SERVICE_SCOPE, currProperties.get(Constants.SERVICE_SCOPE));
         currProperties = new CaseInsensitiveDictionary(properties);
 
         // This event is synchronously delivered after the service properties have been modified.

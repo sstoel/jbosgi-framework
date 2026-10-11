@@ -56,6 +56,10 @@ import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
+import org.jboss.osgi.resolver.XRequirement;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.InvalidSyntaxException;
+import org.osgi.resource.Namespace;
 import org.osgi.framework.namespace.HostNamespace;
 import org.osgi.framework.startlevel.BundleStartLevel;
 import org.osgi.framework.wiring.BundleCapability;
@@ -295,11 +299,27 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
 
         for (XBundle bundle : bundleManager.getBundles(null)) {
             XBundleRevision xres = bundle.getBundleRevision();
-            List<BundleCapability> bcaps = xres.getDeclaredCapabilities(requirement.getNamespace());
-            result.addAll(bcaps);
+            for (BundleCapability bcap : xres.getDeclaredCapabilities(requirement.getNamespace())) {
+                if (matches(requirement, bcap))
+                    result.add(bcap);
+            }
         }
 
         return result;
+    }
+
+    private boolean matches(Requirement requirement, BundleCapability cap) {
+        if (requirement instanceof XRequirement)
+            return ((XRequirement) requirement).matches(cap);
+
+        String filterSpec = requirement.getDirectives().get(Namespace.REQUIREMENT_FILTER_DIRECTIVE);
+        if (filterSpec == null)
+            return true;
+        try {
+            return FrameworkUtil.createFilter(filterSpec).matches(cap.getAttributes());
+        } catch (InvalidSyntaxException ex) {
+            return false;
+        }
     }
 
     private void transitiveDependencyClosure(XBundle bundle, Set<Bundle> closure) {

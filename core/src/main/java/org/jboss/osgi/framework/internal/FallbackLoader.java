@@ -113,6 +113,12 @@ final class FallbackLoader implements LocalLoader {
         fallbackLock.unlock();
     }
 
+    List<XPackageRequirement> getDynamicWeavingImports() {
+        if (weavingImports == null)
+            return Collections.emptyList();
+        return new ArrayList<XPackageRequirement>(weavingImports);
+    }
+
     void addDynamicWeavingImport(XPackageRequirement req) {
         if (weavingImports == null) {
             weavingImports = new ArrayList<XPackageRequirement>();

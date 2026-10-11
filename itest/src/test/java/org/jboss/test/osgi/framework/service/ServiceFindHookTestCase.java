@@ -29,12 +29,18 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.io.InputStream;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.jboss.osgi.metadata.OSGiManifestBuilder;
 import org.jboss.osgi.testing.OSGiFrameworkTest;
+import org.jboss.shrinkwrap.api.ShrinkWrap;
+import org.jboss.shrinkwrap.api.asset.Asset;
+import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.ServiceRegistration;
@@ -50,7 +56,11 @@ public class ServiceFindHookTestCase extends OSGiFrameworkTest {
 
     @Test
     public void testFindHook() throws Exception {
-        final BundleContext context = getFramework().getBundleContext();
+        // Find hooks cannot hide services from the system bundle context, so the lookups go through a client bundle
+        final BundleContext syscontext = getFramework().getBundleContext();
+        Bundle bundle = installBundle(getBundleArchive());
+        bundle.start();
+        final BundleContext context = bundle.getBundleContext();
 
         final boolean[] allServices = new boolean[4];
         final boolean[] allGood = new boolean[4];
@@ -80,10 +90,10 @@ public class ServiceFindHookTestCase extends OSGiFrameworkTest {
             }
         };
 
-        ServiceRegistration registration = context.registerService(FindHook.class.getName(), hook, null);
+        ServiceRegistration registration = syscontext.registerService(FindHook.class.getName(), hook, null);
         try {
-            ServiceReference sref1 = context.registerService(Runnable.class.getName(), service, null).getReference();
-            ServiceReference sref2 = context.registerService(Runnable.class.getName(), service, null).getReference();
+            ServiceReference sref1 = syscontext.registerService(Runnable.class.getName(), service, null).getReference();
+            ServiceReference sref2 = syscontext.registerService(Runnable.class.getName(), service, null).getReference();
 
             ServiceReference sref = context.getServiceReference(Runnable.class.getName());
             assertNotNull("Reference not null", sref);
@@ -108,6 +118,11 @@ public class ServiceFindHookTestCase extends OSGiFrameworkTest {
             assertFalse("All services false", allServices[callIndex.get()]);
             assertTrue("All good", allGood[callIndex.get()]);
 
+            // The hook is called for the system bundle context, but the removal is ignored
+            srefs = syscontext.getServiceReferences(Runnable.class.getName(), null);
+            assertNotNull("References not null", srefs);
+            assertEquals(2, srefs.length);
+
             callIndex.incrementAndGet();
             srefs = context.getAllServiceReferences(Runnable.class.getName(), null);
             assertEquals(2, srefs.length);
@@ -117,6 +132,20 @@ public class ServiceFindHookTestCase extends OSGiFrameworkTest {
             assertTrue("All good", allGood[callIndex.get()]);
         } finally {
             registration.unregister();
+            bundle.uninstall();
         }
+    }
+
+    private JavaArchive getBundleArchive() {
+        final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, "findhook-client");
+        archive.setManifest(new Asset() {
+            public InputStream openStream() {
+                OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();
+                builder.addBundleManifestVersion(2);
+                builder.addBundleSymbolicName(archive.getName());
+                return builder.openStream();
+            }
+        });
+        return archive;
     }
 }

@@ -372,7 +372,8 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         Iterator<BundleListenerRegistration> iterator = registrations.iterator();
         while(iterator.hasNext()) {
             BundleListenerRegistration blreg = iterator.next();
-            if (!contexts.contains(blreg.getBundleContext())) {
+            // Listeners of the system bundle cannot be hidden by hooks
+            if (!contexts.contains(blreg.getBundleContext()) && blreg.getBundle().getBundleId() != 0) {
                 iterator.remove();
             }
         }
@@ -532,6 +533,7 @@ final class FrameworkEventsImpl implements FrameworkEvents {
 
         // Get a snapshot of the current listeners
         Map<BundleContext, Collection<ListenerInfo>> listeners;
+        Map<BundleContext, Collection<ListenerInfo>> systemListeners = new HashMap<BundleContext, Collection<ListenerInfo>>();
         synchronized (serviceListeners) {
             listeners = new HashMap<BundleContext, Collection<ListenerInfo>>();
             for (Entry<XBundle, List<ServiceListenerRegistration>> entry : serviceListeners.entrySet()) {
@@ -548,6 +550,8 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                 }
             }
             for (Map.Entry<BundleContext, Collection<ListenerInfo>> entry : listeners.entrySet()) {
+                if (((AbstractBundleContext<?>) entry.getKey()).getBundleState().getBundleId() == 0)
+                    systemListeners.put(entry.getKey(), new ArrayList<ListenerInfo>(entry.getValue()));
                 listeners.put(entry.getKey(), new RemoveOnlyCollection<ListenerInfo>(entry.getValue()));
             }
             listeners = new RemoveOnlyMap<BundleContext, Collection<ListenerInfo>>(listeners);
@@ -563,6 +567,12 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         BundleContext syscontext = sysbundle.getBundleContext();
         callServiceEventHooks(syscontext, listeners, event);
         callServieEventListenerHooks(syscontext, listeners, event);
+
+        // Listeners of the system bundle cannot be hidden by hooks
+        if (!systemListeners.isEmpty()) {
+            listeners = new HashMap<BundleContext, Collection<ListenerInfo>>(listeners);
+            listeners.putAll(systemListeners);
+        }
 
         // Nobody is interested
         if (listeners.isEmpty())

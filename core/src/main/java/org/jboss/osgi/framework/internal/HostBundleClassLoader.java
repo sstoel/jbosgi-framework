@@ -68,15 +68,19 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
 
     @Override
     public Class<?> loadClassLocal(String className, boolean resolve) throws ClassNotFoundException {
+        // Classes in java.* packages are never loaded from the bundle
+        if (className.startsWith("java."))
+            return null;
+
         WeavingContext context = WeavingContext.create(getBundleState());
         try {
             return super.loadClassLocal(className, resolve);
-        } catch (ClassFormatError cfe) {
+        } catch (LinkageError err) {
             ContextClass wovenClass = context.getContextClass(className);
             if (wovenClass != null) {
-                wovenClass.markComplete();
+                wovenClass.markDefineFailed();
             }
-            throw cfe;
+            throw err;
         } finally {
             context.close();
         }
@@ -98,9 +102,7 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
         if (weavingContext != null) {
             ContextClass wovenClass = weavingContext.getContextClass(definedClass.getName());
             if (wovenClass != null) {
-                wovenClass.setProtectionDomain(definedClass.getProtectionDomain());
-                wovenClass.setDefinedClass(definedClass);
-                wovenClass.markComplete();
+                wovenClass.markDefined(definedClass);
             }
         }
         if (getBundleState().awaitLazyActivation()) {
