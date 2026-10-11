@@ -141,6 +141,15 @@ final class FrameworkExtensions {
         }
     }
 
+    /**
+     * The revisions of the extensions that are attached to the system bundle.
+     */
+    List<XBundleRevision> getAttachedRevisions() {
+        synchronized (attached) {
+            return new ArrayList<XBundleRevision>(attached);
+        }
+    }
+
     boolean hasAttachedExtensions() {
         synchronized (attached) {
             return !attached.isEmpty();

@@ -145,6 +145,25 @@ public class FrameworkExtensionTestCase extends AbstractFrameworkLaunchTest {
     }
 
     @Test
+    public void testDynamicImportOfExtensionPackage() throws Exception {
+        startFramework();
+        Bundle extension = install("extension", extensionHeaders("system.bundle"), VersionedType.class);
+        assertTrue(resolve(extension));
+
+        Map<String, String> headers = new LinkedHashMap<String, String>();
+        headers.put(Constants.DYNAMICIMPORT_PACKAGE, PACKAGE_NAME);
+        Bundle importer = install("importer", headers, null);
+        importer.start();
+        assertTrue(importer.adapt(BundleWiring.class).getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE).isEmpty());
+
+        // The package is provided by the system bundle
+        assertSame(framework.loadClass(TYPE_NAME), importer.loadClass(TYPE_NAME));
+        List<BundleWire> wires = importer.adapt(BundleWiring.class).getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE);
+        assertEquals(1, wires.size());
+        assertEquals(framework.getBundleContext().getBundle(0), wires.get(0).getProviderWiring().getBundle());
+    }
+
+    @Test
     public void testExtensionInstalledBeforeImporterResolves() throws Exception {
         startFramework();
 

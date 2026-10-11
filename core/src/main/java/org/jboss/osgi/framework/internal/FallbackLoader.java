@@ -416,6 +416,24 @@ final class FallbackLoader implements LocalLoader {
         SystemPaths systemPaths = frameworkState.getSystemPaths();
         if (systemPaths.getSystemPaths().contains(pathName)) {
             context.targetRevision = frameworkState.getSystemBundle().getBundleRevision();
+            return;
+        }
+
+        // The packages that framework extensions export are provided by the system bundle
+        String packageName = pathName.replace('/', '.');
+        for (XBundleRevision extRev : frameworkState.getBundleManager().getFrameworkExtensions().getAttachedRevisions()) {
+            for (XPackageCapability pcap : getPackageCapabilities(extRev)) {
+                if (packageName.equals(pcap.getPackageName()) == false)
+                    continue;
+                for (XPackageRequirement pkgreq : matchingPatterns) {
+                    if (pkgreq.matches(pcap) && filterMatches(pkgreq, pcap)) {
+                        context.targetRevision = frameworkState.getSystemBundle().getBundleRevision();
+                        context.capability = pcap;
+                        context.requirement = pkgreq;
+                        return;
+                    }
+                }
+            }
         }
     }
 
