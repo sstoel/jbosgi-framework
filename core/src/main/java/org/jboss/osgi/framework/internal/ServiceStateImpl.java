@@ -239,7 +239,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
             }
             values.add(result);
         }
-        AbstractBundleState.assertBundleState(bundle).addPrototypeServiceInUse(this);
+        BundleServices.get(bundle).addPrototypeServiceInUse(this);
         addUsingBundle(bundle);
         return result;
     }
@@ -260,9 +260,9 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         }
         ungetPrototypeValueInternal(bundle, value);
         if (hasPrototypeValues(bundle) == false) {
-            AbstractBundleState<?> bundleState = AbstractBundleState.assertBundleState(bundle);
-            bundleState.removePrototypeServiceInUse(this);
-            if (bundleState.hasServiceUseCount(this) == false)
+            BundleServices bundleServices = BundleServices.get(bundle);
+            bundleServices.removePrototypeServiceInUse(this);
+            if (bundleServices.hasServiceUseCount(this) == false)
                 removeUsingBundle(bundle);
         }
         return true;
@@ -280,7 +280,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
             for (S value : values)
                 ungetPrototypeValueInternal(bundle, value);
         }
-        AbstractBundleState.assertBundleState(bundle).removePrototypeServiceInUse(this);
+        BundleServices.get(bundle).removePrototypeServiceInUse(this);
     }
 
     boolean hasPrototypeValues(XBundle bundle) {
@@ -424,7 +424,8 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     @Override
     public Bundle[] getUsingBundles() {
         synchronized (this) {
-            if (usingBundles == null)
+            // Null is returned when no bundles are using the service
+            if (usingBundles == null || usingBundles.isEmpty())
                 return null;
 
             Set<Bundle> bundles = new HashSet<Bundle>();

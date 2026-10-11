@@ -32,7 +32,7 @@ import org.osgi.framework.BundleContext;
 final class SystemBundleContext extends AbstractBundleContext<SystemBundleState> {
 
     SystemBundleContext(SystemBundleState bundle) {
-        super(bundle);
+        super(bundle, bundle.getFrameworkState());
     }
 
     @Override

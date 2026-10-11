@@ -44,7 +44,9 @@ import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.osgi.framework.Services;
 import org.jboss.osgi.framework.internal.AbstractCommonBundleRevision;
+import org.jboss.osgi.framework.internal.BundleServices;
 import org.jboss.osgi.framework.internal.DTOFactory;
+import org.jboss.osgi.framework.internal.ModuleBundleContext;
 import org.jboss.osgi.framework.spi.LockManager.LockContext;
 import org.jboss.osgi.framework.spi.LockManager.LockableItem;
 import org.jboss.osgi.framework.spi.LockManager.Method;
@@ -79,7 +81,8 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
     private final AtomicInteger bundleState = new AtomicInteger(Bundle.RESOLVED);
     private final ReentrantLock bundleLock = new ReentrantLock();
     private final BundleManager bundleManager;
-    private final BundleContext context;
+    private final BundleContext systemContext;
+    private ModuleBundleContext bundleContext;
     private final AbstractCommonBundleRevision brev;
     private final Module module;
     private BundleActivator bundleActivator;
@@ -94,7 +97,7 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             throw MESSAGES.illegalArgumentNull("brev");
         XBundle sysbundle = (XBundle) context.getBundle();
         this.bundleManager = sysbundle.adapt(BundleManager.class);
-        this.context = context;
+        this.systemContext = context;
         this.module = module;
         this.brev = brev;
 
@@ -203,6 +206,9 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             result = (T) getBundleRevision().getWiring();
         } else if (type.isAssignableFrom(OSGiMetaData.class)) {
             result = (T) getOSGiMetaData();
+        } else if (type == BundleServices.class) {
+            ModuleBundleContext context = getModuleBundleContext();
+            result = context != null ? (T) context.getBundleServices() : null;
         } else {
             result = DTOFactory.adapt(this, type);
         }
@@ -276,7 +282,7 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             }
 
             if (bundleActivator != null) {
-                bundleActivator.start(context);
+                bundleActivator.start(getBundleContext());
             }
 
             setPersistentlyStarted(true);
@@ -308,8 +314,17 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             if ((options & Bundle.STOP_TRANSIENT) == 0)
                 setPersistentlyStarted(false);
 
-            if (bundleActivator != null) {
-                bundleActivator.stop(context);
+            try {
+                if (bundleActivator != null) {
+                    bundleActivator.stop(getBundleContext());
+                }
+            } finally {
+                // Any services registered by this bundle must be unregistered.
+                // Any services used by this bundle must be released.
+                // Any listeners registered by this bundle must be removed
+                ModuleBundleContext context = getModuleBundleContext();
+                if (context != null)
+                    context.release();
             }
 
             bundleState.set(Bundle.RESOLVED);
@@ -351,7 +366,15 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             // Remove from the module loader
             FrameworkModuleLoader provider = getPluginService(IntegrationServices.FRAMEWORK_MODULE_LOADER_PLUGIN, FrameworkModuleLoader.class);
             provider.removeModule(brev);
-            bundleState.set(Bundle.UNINSTALLED);
+
+            // The bundle context is no longer valid
+            synchronized (this) {
+                if (bundleContext != null) {
+                    bundleContext.close();
+                    bundleContext = null;
+                }
+                bundleState.set(Bundle.UNINSTALLED);
+            }
         } finally {
             lockManager.unlockItems(lockContext);
         }
@@ -369,12 +392,14 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
 
     @Override
     public ServiceReference<?>[] getRegisteredServices() {
-        return null;
+        ModuleBundleContext context = getModuleBundleContext();
+        return context != null ? context.getRegisteredServices() : null;
     }
 
     @Override
     public ServiceReference<?>[] getServicesInUse() {
-        return null;
+        ModuleBundleContext context = getModuleBundleContext();
+        return context != null ? context.getServicesInUse() : null;
     }
 
     @Override
@@ -414,7 +439,21 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
 
     @Override
     public BundleContext getBundleContext() {
-        return context;
+        return getModuleBundleContext();
+    }
+
+    /**
+     * The bundle context of this bundle.
+     *
+     * A module is not started like a bundle, so the context is available from when the bundle is created until it is
+     * uninstalled. It is not the context of the system bundle: services, listeners and hooks see this bundle.
+     */
+    private synchronized ModuleBundleContext getModuleBundleContext() {
+        if (getState() == Bundle.UNINSTALLED)
+            return null;
+        if (bundleContext == null)
+            bundleContext = ModuleBundleContext.create(this, systemContext);
+        return bundleContext;
     }
 
     @Override

@@ -90,9 +90,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
     private final FrameworkState frameworkState;
     private final ReentrantLock bundleLock = new ReentrantLock();
     private final AtomicInteger bundleState = new AtomicInteger(INSTALLED);
-    private final List<ServiceState<?>> registeredServices = new CopyOnWriteArrayList<ServiceState<?>>();
-    private final ConcurrentHashMap<ServiceState<?>, AtomicInteger> usedServices = new ConcurrentHashMap<ServiceState<?>, AtomicInteger>();
-    private final Set<ServiceState<?>> usedPrototypeServices = ConcurrentHashMap.newKeySet();
+    private final BundleServices bundleServices = new BundleServices();
 
     private AbstractBundleContext<? extends AbstractBundleState<?>> bundleContext;
     private Exception lastResolverException;
@@ -149,7 +147,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
         return getBundleRevision().getSymbolicName();
     }
 
-    abstract AbstractBundleContext<?> createContextInternal();
+    abstract AbstractBundleContext<? extends AbstractBundleState<?>> createContextInternal();
 
     /**
      * Required by spec:
@@ -271,7 +269,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
     void addRegisteredService(ServiceState<?> serviceState) {
         LOGGER.tracef("Add registered service %s to: %s", serviceState, this);
-        registeredServices.add(serviceState);
+        bundleServices.addRegisteredService(serviceState);
     }
 
     @Override
@@ -305,7 +303,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
     void removeRegisteredService(ServiceState<?> serviceState) {
         LOGGER.tracef("Remove registered service %s from: %s", serviceState, this);
-        registeredServices.remove(serviceState);
+        bundleServices.removeRegisteredService(serviceState);
     }
 
     @Override
@@ -323,7 +321,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
     }
 
     List<ServiceState<?>> getRegisteredServicesInternal() {
-        return Collections.unmodifiableList(registeredServices);
+        return bundleServices.getRegisteredServices();
     }
 
     @Override
@@ -341,44 +339,11 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
     }
 
     Set<ServiceState<?>> getServicesInUseInternal() {
-        Set<ServiceState<?>> result = new HashSet<ServiceState<?>>(usedServices.keySet());
-        result.addAll(usedPrototypeServices);
-        return Collections.unmodifiableSet(result);
+        return bundleServices.getServicesInUse();
     }
 
-    boolean hasServiceUseCount(ServiceState<?> serviceState) {
-        return usedServices.containsKey(serviceState);
-    }
-
-    void addPrototypeServiceInUse(ServiceState<?> serviceState) {
-        usedPrototypeServices.add(serviceState);
-    }
-
-    void removePrototypeServiceInUse(ServiceState<?> serviceState) {
-        usedPrototypeServices.remove(serviceState);
-    }
-
-    void addServiceInUse(ServiceState<?> serviceState) {
-        LOGGER.tracef("Add service in use %s to: %s", serviceState, this);
-        AtomicInteger count = usedServices.computeIfAbsent(serviceState, (k) -> new AtomicInteger());
-        synchronized (count) {
-            count.incrementAndGet();
-        }
-    }
-
-    int removeServiceInUse(ServiceState<?> serviceState) {
-        LOGGER.tracef("Remove service in use %s from: %s", serviceState, this);
-        AtomicInteger count = usedServices.get(serviceState);
-        if (count == null)
-            return -1;
-
-        synchronized (count) {
-            int countVal = count.decrementAndGet();
-            if (countVal == 0)
-                usedServices.remove(serviceState);
-
-            return countVal;
-        }
+    BundleServices getBundleServices() {
+        return bundleServices;
     }
 
     @Override

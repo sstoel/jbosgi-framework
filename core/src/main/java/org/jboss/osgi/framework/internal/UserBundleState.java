@@ -822,20 +822,10 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     private void removeServicesAndListeners() {
         // Any services registered by this bundle must be unregistered.
         // Any services used by this bundle must be released.
-        for (ServiceState<?> serviceState : getRegisteredServicesInternal()) {
-            serviceState.unregisterInternal();
-        }
-        ServiceManager serviceManager = getFrameworkState().getServiceManagerPlugin();
-        for (ServiceState<?> serviceState : getServicesInUseInternal()) {
-            while (serviceManager.ungetService(this, serviceState)) {
-            }
-            ((ServiceStateImpl<?>) serviceState).releasePrototypeValues(this);
-            serviceState.removeUsingBundle(this);
-        }
-
         // Any listeners registered by this bundle must be removed
+        ServiceManager serviceManager = getFrameworkState().getServiceManagerPlugin();
         FrameworkEvents eventsPlugin = getFrameworkState().getFrameworkEvents();
-        eventsPlugin.removeBundleListeners(this);
+        getBundleServices().release(this, serviceManager, eventsPlugin);
     }
 
     private boolean hasActiveWiresWhileUninstalling() {

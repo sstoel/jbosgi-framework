@@ -76,8 +76,12 @@ public class ModuleBundleTestCase extends AbstractModuleIntegrationTest {
         XBundle bundleA = installResource(moduleA).getBundle();
         try {
             // getBundleContext
+            // The bundle has its own context, it is not the context of the system bundle
             BundleContext context = bundleA.getBundleContext();
-            Assert.assertEquals(getSystemContext(), context);
+            Assert.assertNotNull(context);
+            Assert.assertNotSame(getSystemContext(), context);
+            Assert.assertSame(bundleA, context.getBundle());
+            Assert.assertSame(context, bundleA.getBundleContext());
 
             // getBundleId, getLastModified, getSymbolicName, getVersion, getLocation
             Assert.assertTrue("Bundle id > 0", bundleA.getBundleId() > 0);

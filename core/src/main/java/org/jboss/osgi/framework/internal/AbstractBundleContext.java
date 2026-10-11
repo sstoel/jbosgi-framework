@@ -41,6 +41,7 @@ import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.ServiceManager;
 import org.jboss.osgi.framework.spi.ServiceState;
 import org.jboss.osgi.framework.spi.StorageManager;
+import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.jboss.osgi.resolver.spi.RemoveOnlyCollection;
 import org.jboss.osgi.vfs.AbstractVFS;
@@ -67,18 +68,19 @@ import org.osgi.framework.hooks.bundle.FindHook;
  * @author thomas.diesler@jboss.com
  * @since 29-Jun-2010
  */
-abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implements BundleContext {
+abstract class AbstractBundleContext<T extends XBundle> implements BundleContext {
 
     private final T bundleState;
     private final FrameworkState frameworkState;
     private final BundleManagerPlugin bundleManager;
     private boolean destroyed;
 
-    AbstractBundleContext(T bundleState) {
+    AbstractBundleContext(T bundleState, FrameworkState frameworkState) {
         assert bundleState != null : "Null bundleState";
+        assert frameworkState != null : "Null frameworkState";
         this.bundleState = bundleState;
-        this.frameworkState = bundleState.getFrameworkState();
-        this.bundleManager = bundleState.getBundleManager();
+        this.frameworkState = frameworkState;
+        this.bundleManager = frameworkState.getBundleManager();
     }
 
     /**
@@ -547,7 +549,7 @@ abstract class AbstractBundleContext<T extends AbstractBundleState<?>> implement
                 if (serviceState.ungetPrototypeValue(bundleState, service) == false)
                     throw MESSAGES.illegalArgumentInvalidServiceObject(service);
             } else {
-                if (bundleState.hasServiceUseCount(serviceState) == false || serviceState.isScopedValueInUse(bundleState, service) == false)
+                if (BundleServices.get(bundleState).hasServiceUseCount(serviceState) == false || serviceState.isScopedValueInUse(bundleState, service) == false)
                     throw MESSAGES.illegalArgumentInvalidServiceObject(service);
                 AbstractBundleContext.this.ungetService(sref);
             }

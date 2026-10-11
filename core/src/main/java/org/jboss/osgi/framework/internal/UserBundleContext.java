@@ -34,6 +34,6 @@ import org.osgi.framework.BundleContext;
 class UserBundleContext extends AbstractBundleContext<UserBundleState> {
 
     UserBundleContext(UserBundleState userBundle) {
-        super(userBundle);
+        super(userBundle, userBundle.getFrameworkState());
     }
 }

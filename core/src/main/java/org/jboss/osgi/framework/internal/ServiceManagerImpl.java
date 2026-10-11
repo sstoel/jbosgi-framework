@@ -121,8 +121,8 @@ public final class ServiceManagerImpl implements ServiceManager {
         };
 
         long serviceId = getNextServiceId();
-        AbstractBundleState<?> bundleState = AbstractBundleState.assertBundleState(bundle);
-        ServiceState<?> serviceState = new ServiceStateImpl<Object>(this, bundleState, serviceId, classNames, valueProvider, properties);
+        BundleServices bundleServices = BundleServices.get(bundle);
+        ServiceState<?> serviceState = new ServiceStateImpl<Object>(this, bundle, serviceId, classNames, valueProvider, properties);
         LOGGER.debugf("Register service: %s", serviceState);
 
         synchronized (serviceContainer) {
@@ -137,7 +137,7 @@ public final class ServiceManagerImpl implements ServiceManager {
                 }
             }
         }
-        bundleState.addRegisteredService(serviceState);
+        bundleServices.addRegisteredService(serviceState);
 
         // Call the newly added ListenerHook.added() method
         if (serviceValue instanceof ListenerHook) {
@@ -146,7 +146,7 @@ public final class ServiceManagerImpl implements ServiceManager {
         }
 
         // This event is synchronously delivered after the service has been registered with the Framework.
-        frameworkEvents.fireServiceEvent(bundleState, ServiceEvent.REGISTERED, serviceState);
+        frameworkEvents.fireServiceEvent(bundle, ServiceEvent.REGISTERED, serviceState);
 
         return serviceState;
     }
@@ -261,17 +261,17 @@ public final class ServiceManagerImpl implements ServiceManager {
             getServiceRecursion.set(bundle);
 
             // Add the given service ref to the list of used services
-            AbstractBundleState<?> bundleState = AbstractBundleState.assertBundleState(bundle);
-            bundleState.addServiceInUse(serviceState);
-            serviceState.addUsingBundle(bundleState);
+            BundleServices bundleServices = BundleServices.get(bundle);
+            bundleServices.addServiceInUse(serviceState);
+            serviceState.addUsingBundle(bundle);
 
-            value = serviceState.getScopedValue(bundleState);
+            value = serviceState.getScopedValue(bundle);
 
             // If the factory returned an invalid value
             // restore the service usage counts
             if (value == null) {
-                bundleState.removeServiceInUse(serviceState);
-                serviceState.removeUsingBundle(bundleState);
+                bundleServices.removeServiceInUse(serviceState);
+                serviceState.removeUsingBundle(bundle);
             }
         } finally {
             getServiceRecursion.remove();
@@ -317,10 +317,7 @@ public final class ServiceManagerImpl implements ServiceManager {
             }
 
             // Remove from owner bundle
-            if (serviceOwner instanceof AbstractBundleState) {
-                AbstractBundleState<?> ownerState = AbstractBundleState.assertBundleState(serviceOwner);
-                ownerState.removeRegisteredService(serviceState);
-            }
+            BundleServices.get(serviceOwner).removeRegisteredService(serviceState);
         }
     }
 
@@ -334,11 +331,10 @@ public final class ServiceManagerImpl implements ServiceManager {
      */
     @Override
     public boolean ungetService(XBundle bundle, ServiceState<?> serviceState) {
-        AbstractBundleState<?> bundleState = AbstractBundleState.assertBundleState(bundle);
-        serviceState.ungetScopedValue(bundleState);
-        int useCount = bundleState.removeServiceInUse(serviceState);
-        if (useCount == 0 && !((ServiceStateImpl<?>) serviceState).hasPrototypeValues(bundleState))
-            serviceState.removeUsingBundle(bundleState);
+        serviceState.ungetScopedValue(bundle);
+        int useCount = BundleServices.get(bundle).removeServiceInUse(serviceState);
+        if (useCount == 0 && !((ServiceStateImpl<?>) serviceState).hasPrototypeValues(bundle))
+            serviceState.removeUsingBundle(bundle);
 
         return useCount >= 0;
     }
