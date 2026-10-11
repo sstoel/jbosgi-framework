@@ -497,7 +497,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
                 if (bundleInUse == false) {
                     UserBundleState auxUser = UserBundleState.assertBundleState(auxState);
                     bundleManager.unresolveBundle(auxUser);
-                    bundleManager.removeBundle(auxUser, options);
+                    // The revisions are removed by the bundle lifecycle, like those of a bundle that is not in use
+                    bundleManager.removeBundle(auxUser, options | InternalConstants.UNINSTALL_INTERNAL);
                 }
             }
         }
