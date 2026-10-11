@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Dictionary;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.List;
@@ -56,6 +57,7 @@ import org.jboss.osgi.framework.spi.BundleStartLevelSupport;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.LockManager.LockableItem;
 import org.jboss.osgi.framework.spi.ServiceState;
+import org.jboss.osgi.framework.spi.StorageManager;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.metadata.CaseInsensitiveDictionary;
 import org.jboss.osgi.metadata.OSGiMetaData;
@@ -458,7 +460,10 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
     @Override
     public Map<X509Certificate, List<X509Certificate>> getSignerCertificates(int signersType) {
-        throw new UnsupportedOperationException();
+        // Signed bundles are not supported, no bundle has signers
+        if (signersType != SIGNERS_ALL && signersType != SIGNERS_TRUSTED)
+            throw MESSAGES.illegalArgumentInvalidSignersType(signersType);
+        return new HashMap<X509Certificate, List<X509Certificate>>();
     }
 
     @Override
@@ -629,13 +634,16 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
     @Override
     public File getDataFile(String filename) {
-        // [TODO] R5 Bundle.getDataFile
-        throw new UnsupportedOperationException();
+        assertNotUninstalled();
+        // A fragment has no persistent storage area
+        if (isFragment())
+            return null;
+        StorageManager storageManager = getFrameworkState().getStorageManager();
+        return storageManager.getDataFile(getBundleId(), filename);
     }
 
     @Override
-    public int compareTo(Bundle o) {
-        // [TODO] R5 Bundle.compareTo
-        throw new UnsupportedOperationException();
+    public int compareTo(Bundle other) {
+        return Long.compare(getBundleId(), other.getBundleId());
     }
 }

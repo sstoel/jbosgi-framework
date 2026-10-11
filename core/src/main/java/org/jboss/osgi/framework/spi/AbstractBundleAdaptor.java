@@ -540,14 +540,15 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
 
     @Override
     public File getDataFile(String filename) {
-        // [TODO] R5 Bundle.getDataFile
-        throw new UnsupportedOperationException();
+        BundleContext context = getBundleContext();
+        if (context == null)
+            throw MESSAGES.illegalStateInvalidBundleContext(this);
+        return context.getDataFile(filename);
     }
 
     @Override
-    public int compareTo(Bundle o) {
-        // [TODO] R5 Bundle.compareTo
-        throw new UnsupportedOperationException();
+    public int compareTo(Bundle other) {
+        return Long.compare(getBundleId(), other.getBundleId());
     }
 
     @Override

@@ -539,6 +539,10 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
                 deployment.putAttachment(IntegrationConstants.OSGI_METADATA_KEY, metadata);
             }
 
+            // The syntax of the headers is validated before they are used
+            if (metadata.getBundleManifestVersion() > 1)
+                BundleManifestSyntaxValidator.validate(metadata, deployment.getLocation());
+
             // Create the bundle revision
             if (metadata.getFragmentHost() == null) {
                 brev = new HostBundleRevisionFactory(getFrameworkState(), context, deployment, serviceTarget).create();

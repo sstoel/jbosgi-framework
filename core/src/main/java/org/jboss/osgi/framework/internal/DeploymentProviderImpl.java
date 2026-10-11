@@ -75,7 +75,9 @@ public final class DeploymentProviderImpl implements DeploymentProvider {
             dep.putAttachment(IntegrationConstants.OSGI_METADATA_KEY, metadata);
             return dep;
         } catch (IllegalArgumentException nfe) {
-            throw FrameworkMessages.MESSAGES.invalidNumberFormat(nfe, nfe.getMessage());
+            // An improperly formatted version or symbolic name
+            BundleException ex = FrameworkMessages.MESSAGES.invalidNumberFormat(nfe, nfe.getMessage());
+            throw new BundleException(ex.getMessage(), BundleException.MANIFEST_ERROR, nfe);
         } catch (BundleException ex) {
             // No valid OSGi manifest. Fallback to jbosgi-xservice.properties
             cause = ex;

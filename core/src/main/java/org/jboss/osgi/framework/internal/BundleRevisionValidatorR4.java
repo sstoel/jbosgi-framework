@@ -155,16 +155,14 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
             }
         }
 
-        // [TODO] Duplicate attribute or duplicate directive (except in the Bundle-Native code clause).
+        // The syntax of the headers is validated by the BundleManifestSyntaxValidator. That is
+        // - Duplicate attribute or duplicate directive (except in the Bundle-NativeCode clause)
+        // - Export-Package with a mandatory attribute that is not defined
+        // - Improperly formatted version or bundle symbolic name, unrecognized directive value
+        // - Requiring the same bundle symbolic name more than once
 
-        // [TODO] Export-Package with a mandatory attribute that is not defined.
-
-        // [TODO] Any syntactic error (for example, improperly formatted version or bundle symbolic name, unrecognized directive
-        // value, etc.).
-
-        // [TODO] The manifest lists a OSGI-INF/permission.perm file but no such file is present.
-
-        // [TODO] Requiring the same bundle symbolic name more than once
+        // A manifest that lists OSGI-INF/permission.perm without that file is an error of a signed bundle,
+        // signed bundles are not supported
     }
 
     private static boolean isEmpty(List<?> list) {

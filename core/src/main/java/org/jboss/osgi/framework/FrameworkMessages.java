@@ -338,6 +338,24 @@ public interface FrameworkMessages {
     @Message(id = 11292, value = "Not allowed to provide a capability in the osgi.ee namespace in: %s")
     String notAllowedToProvideExecutionEnvironmentCapability(XBundleRevision brev);
 
+    @Message(id = 11302, value = "Invalid signers type: %d")
+    IllegalArgumentException illegalArgumentInvalidSignersType(int signersType);
+
+    @Message(id = 11297, value = "Invalid Bundle-SymbolicName '%s' in: %s")
+    String invalidSymbolicName(String symbolicName, String location);
+
+    @Message(id = 11298, value = "Invalid %s header '%s' in: %s")
+    String invalidHeaderValue(String header, String value, String location);
+
+    @Message(id = 11299, value = "Duplicate '%s' in %s header '%s' in: %s")
+    String duplicateHeaderParameter(String name, String header, String clause, String location);
+
+    @Message(id = 11300, value = "Mandatory attribute '%s' is not defined in Export-Package '%s' in: %s")
+    String undefinedMandatoryAttribute(String attribute, String clause, String location);
+
+    @Message(id = 11301, value = "Bundle '%s' is required more than once in: %s")
+    String duplicateRequireBundle(String symbolicName, String location);
+
     @Message(id = 11294, value = "Cannot connect bundle at location: %s")
     BundleException cannotConnectBundle(@Cause Throwable cause, String location);
 
