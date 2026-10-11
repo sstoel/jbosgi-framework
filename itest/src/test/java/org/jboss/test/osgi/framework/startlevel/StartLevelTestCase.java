@@ -260,6 +260,51 @@ public class StartLevelTestCase extends OSGiFrameworkTest {
         }
     }
 
+    @Test
+    public void testInvalidStartLevel() throws Exception {
+        JavaArchive archive1 = createTestBundle("b1.jar", ActivatorA.class);
+
+        Framework framework = createFramework();
+        try {
+            framework.start();
+
+            FrameworkStartLevel frameworkStartLevel = framework.adapt(FrameworkStartLevel.class);
+            int startLevel = frameworkStartLevel.getStartLevel();
+            int initialLevel = frameworkStartLevel.getInitialBundleStartLevel();
+            for (int invalid : new int[] { 0, -1 }) {
+                try {
+                    frameworkStartLevel.setStartLevel(invalid);
+                    Assert.fail("IllegalArgumentException expected");
+                } catch (IllegalArgumentException ex) {
+                    // expected
+                }
+                try {
+                    frameworkStartLevel.setInitialBundleStartLevel(invalid);
+                    Assert.fail("IllegalArgumentException expected");
+                } catch (IllegalArgumentException ex) {
+                    // expected
+                }
+            }
+            Assert.assertEquals(startLevel, frameworkStartLevel.getStartLevel());
+            Assert.assertEquals(initialLevel, frameworkStartLevel.getInitialBundleStartLevel());
+
+            Bundle bundleA = installBundle(archive1);
+            BundleStartLevel bundleStartLevel = bundleA.adapt(BundleStartLevel.class);
+            for (int invalid : new int[] { 0, -1 }) {
+                try {
+                    bundleStartLevel.setStartLevel(invalid);
+                    Assert.fail("IllegalArgumentException expected");
+                } catch (IllegalArgumentException ex) {
+                    // expected
+                }
+            }
+            Assert.assertEquals(initialLevel, bundleStartLevel.getStartLevel());
+        } finally {
+            framework.stop();
+            framework.waitForStop(2000);
+        }
+    }
+
     private JavaArchive createTestBundle(String name, final Class<? extends BundleActivator> activator) {
         final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, name);
         archive.setManifest(new Asset() {

@@ -31,10 +31,10 @@ import java.util.List;
 
 import org.jboss.osgi.framework.internal.WeavingContext.ContextClass;
 import org.jboss.osgi.framework.internal.WeavingContext.HookRegistration;
-import org.jboss.osgi.framework.spi.BundleReferenceClassLoader;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.metadata.OSGiMetaData;
 import org.jboss.osgi.metadata.OSGiMetaDataBuilder;
+import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevisionBuilder;
 import org.jboss.osgi.resolver.XBundleRevisionBuilderFactory;
 import org.jboss.osgi.resolver.XPackageRequirement;
@@ -86,8 +86,9 @@ final class WeavingHookProcessor implements ClassFileTransformer {
                     iterator.remove();
                 }
                 wovenClass.markTransformingFailed();
-                BundleReferenceClassLoader<?> bref = (BundleReferenceClassLoader<?>) hook.getClass().getClassLoader();
-                frameworkEvents.fireFrameworkEvent(bref.getBundleState(), FrameworkEvent.ERROR, rte, (FrameworkListener[]) null);
+                // The hook may be registered by the system bundle with a class that no bundle loaded
+                XBundle hookBundle = (XBundle) hookreg.sref.getBundle();
+                frameworkEvents.fireFrameworkEvent(hookBundle != null ? hookBundle : hostRev.getBundle(), FrameworkEvent.ERROR, rte, (FrameworkListener[]) null);
                 throw rte;
             }
         }

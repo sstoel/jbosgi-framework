@@ -35,6 +35,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Assert;
 
@@ -53,7 +54,13 @@ import org.osgi.framework.BundleEvent;
 import org.osgi.framework.BundleListener;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.Version;
+import org.osgi.framework.namespace.IdentityNamespace;
+import org.osgi.framework.namespace.PackageNamespace;
+import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.FrameworkWiring;
+import org.osgi.resource.Namespace;
+import org.osgi.resource.Requirement;
+import org.osgi.resource.Resource;
 
 /**
  * Test the {@link FrameworkWiring}.
@@ -303,6 +310,63 @@ public class FrameworkWiringTestCase extends OSGiFrameworkTest {
             bundleI.uninstall();
             if (bundleE.getState() != Bundle.UNINSTALLED)
                 bundleE.uninstall();
+        }
+    }
+
+    @Test
+    public void testFindProviders() throws Exception {
+        FrameworkWiring frameworkWiring = getFramework().adapt(FrameworkWiring.class);
+        Bundle bundleE = installBundle(assembleArchive("exporter", "/bundles/package-admin/exporter", Exported.class));
+        try {
+            // Without a filter all capabilities in the namespace are found
+            Collection<BundleCapability> caps = frameworkWiring.findProviders(new TestRequirement(IdentityNamespace.IDENTITY_NAMESPACE, null));
+            assertTrue("System bundle and test bundle found: " + caps, caps.size() >= 2);
+
+            // The filter restricts the capabilities
+            String filter = "(" + IdentityNamespace.IDENTITY_NAMESPACE + "=" + bundleE.getSymbolicName() + ")";
+            caps = frameworkWiring.findProviders(new TestRequirement(IdentityNamespace.IDENTITY_NAMESPACE, filter));
+            assertEquals(1, caps.size());
+            assertSame(bundleE, caps.iterator().next().getRevision().getBundle());
+
+            filter = "(" + IdentityNamespace.IDENTITY_NAMESPACE + "=does.not.exist)";
+            caps = frameworkWiring.findProviders(new TestRequirement(IdentityNamespace.IDENTITY_NAMESPACE, filter));
+            assertTrue(caps.isEmpty());
+
+            // A requirement of a bundle revision
+            caps = frameworkWiring.findProviders(new TestRequirement(PackageNamespace.PACKAGE_NAMESPACE, "(" + PackageNamespace.PACKAGE_NAMESPACE + "=" + Exported.class.getPackage().getName() + ")"));
+            assertEquals(1, caps.size());
+            assertSame(bundleE, caps.iterator().next().getRevision().getBundle());
+        } finally {
+            bundleE.uninstall();
+        }
+    }
+
+    static class TestRequirement implements Requirement {
+
+        private final String namespace;
+        private final String filter;
+
+        TestRequirement(String namespace, String filter) {
+            this.namespace = namespace;
+            this.filter = filter;
+        }
+
+        public String getNamespace() {
+            return namespace;
+        }
+
+        public Map<String, String> getDirectives() {
+            if (filter == null)
+                return Collections.emptyMap();
+            return Collections.singletonMap(Namespace.REQUIREMENT_FILTER_DIRECTIVE, filter);
+        }
+
+        public Map<String, Object> getAttributes() {
+            return Collections.emptyMap();
+        }
+
+        public Resource getResource() {
+            return null;
         }
     }
 
