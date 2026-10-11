@@ -30,11 +30,14 @@ import static org.osgi.framework.Constants.FRAMEWORK_BUNDLE_PARENT_EXT;
 import static org.osgi.framework.Constants.FRAMEWORK_SYSTEMPACKAGES;
 import static org.osgi.framework.Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA;
 
+import java.lang.module.ModuleDescriptor;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.jboss.modules.filter.MultiplePathFilterBuilder;
 import org.jboss.modules.filter.PathFilter;
@@ -74,8 +77,17 @@ public final class SystemPathsImpl implements SystemPaths {
             systemPackages.addAll(packagesAsList(systemPackagesProp));
         } else {
             // The default system packages
-            systemPackages.addAll(Arrays.asList(SystemPaths.DEFAULT_SYSTEM_PACKAGES));
-            systemPackages.addAll(frameworkPackages);
+            systemPackages.addAll(getDefaultSystemPackages());
+        }
+
+        // The system bundle always exports the java.* packages of the running Java platform
+        Set<String> configuredNames = new HashSet<String>();
+        for (String packageSpec : systemPackages) {
+            configuredNames.add(packageName(packageSpec));
+        }
+        for (String javaPackage : getRuntimeJavaPackages()) {
+            if (!configuredNames.contains(javaPackage))
+                systemPackages.add(javaPackage);
         }
 
         // Add the extra system packages
@@ -95,6 +107,42 @@ public final class SystemPathsImpl implements SystemPaths {
             bootDelegationPackages.add("com.sun.*");
         }
         bootDelegationPackages.add("java.*");
+    }
+
+    /**
+     * The java.* packages that the running Java platform exports to all modules.
+     */
+    static Set<String> getRuntimeJavaPackages() {
+        Set<String> result = new TreeSet<String>();
+        for (Module module : ModuleLayer.boot().modules()) {
+            ModuleDescriptor descriptor = module.getDescriptor();
+            if (descriptor == null)
+                continue;
+            for (ModuleDescriptor.Exports exports : descriptor.exports()) {
+                if (!exports.isQualified() && exports.source().startsWith("java."))
+                    result.add(exports.source());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * The system packages that are used when {@link org.osgi.framework.Constants#FRAMEWORK_SYSTEMPACKAGES} is not configured.
+     */
+    static Set<String> getDefaultSystemPackages() {
+        Set<String> result = new LinkedHashSet<String>(getRuntimeJavaPackages());
+        for (String packageSpec : SystemPaths.DEFAULT_SYSTEM_PACKAGES) {
+            // The java.* packages are taken from the running Java platform
+            if (!packageSpec.startsWith("java."))
+                result.add(packageSpec);
+        }
+        result.addAll(Arrays.asList(SystemPaths.DEFAULT_FRAMEWORK_PACKAGES));
+        return result;
+    }
+
+    private static String packageName(String packageSpec) {
+        int index = packageSpec.indexOf(';');
+        return (index > 0 ? packageSpec.substring(0, index) : packageSpec).trim();
     }
 
     @Override

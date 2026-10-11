@@ -59,6 +59,9 @@ public final class FrameworkStartLevelImpl implements FrameworkStartLevelSupport
     public void setStartLevel(int startlevel, FrameworkListener... listeners) {
         if (startlevel <= 0)
             throw MESSAGES.illegalArgumentInvalidStartLevel(startlevel);
+        // The start level cannot be changed before the framework is started
+        if (systemBundle.getState() == Bundle.STARTING && getStartLevel() == 0)
+            throw new IllegalStateException("Framework not started");
         startLevelSupport.setFrameworkStartLevel(startlevel, listeners);
     }
 

@@ -331,4 +331,10 @@ public interface FrameworkMessages {
 
     @Message(id = 11291, value = "Invalid Bundle-NativeCode header in: %s")
     String invalidNativeCodeHeader(XBundleRevision brev);
+
+    @Message(id = 11293, value = "Header %s not allowed in framework extension: %s")
+    String illegalFrameworkExtensionHeader(String header, XBundleRevision brev);
+
+    @Message(id = 11292, value = "Not allowed to provide a capability in the osgi.ee namespace in: %s")
+    String notAllowedToProvideExecutionEnvironmentCapability(XBundleRevision brev);
 }

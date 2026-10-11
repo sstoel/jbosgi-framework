@@ -55,7 +55,7 @@ final class RevisionContentResourceLoader implements IterableResourceLoader {
     RevisionContentResourceLoader(HostBundleRevision hostRev, RevisionContent revContent) {
         assert hostRev != null : "Null hostRev";
         assert revContent != null : "Null revContent";
-        this.delegate = new VirtualFileResourceLoader(revContent.getVirtualFile());
+        this.delegate = new VirtualFileResourceLoader(revContent.getVirtualFile(), revContent.getVersionedRoots(), revContent.isMultiRelease());
         this.revContent = revContent;
         this.hostRev = hostRev;
     }
@@ -77,7 +77,7 @@ final class RevisionContentResourceLoader implements IterableResourceLoader {
 
     @Override
     public Resource getResource(String path) {
-        URL url = revContent.getEntry(path);
+        URL url = revContent.getResource(path);
         return url != null ? new URLResource(url) : null;
     }
 

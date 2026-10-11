@@ -27,6 +27,7 @@ import static org.jboss.osgi.resolver.ResolverMessages.MESSAGES;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -64,6 +65,7 @@ import org.osgi.framework.namespace.HostNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleWire;
+import org.osgi.resource.Requirement;
 import org.osgi.resource.Resource;
 import org.osgi.resource.Wire;
 import org.osgi.resource.Wiring;
@@ -105,6 +107,11 @@ final class FrameworkResolverImpl implements XResolver {
     }
 
     @Override
+    public Map<Resource, List<Wire>> resolveDynamic(ResolveContext resolveContext, Wiring hostWiring, Requirement dynamicRequirement) throws ResolutionException {
+        return resolver.resolveDynamic(resolveContext, hostWiring, dynamicRequirement);
+    }
+
+    @Override
     public synchronized Map<Resource, List<Wire>> resolveAndApply(XResolveContext resolveContext) throws ResolutionException {
         return resolveInternal(resolveContext, true);
     }
@@ -120,6 +127,20 @@ final class FrameworkResolverImpl implements XResolver {
         BundleContext syscontext = bundleManager.getSystemContext();
         Collection<Resource> manres = new HashSet<Resource>(resolveContext.getMandatoryResources());
         Collection<Resource> optres = new HashSet<Resource>(resolveContext.getOptionalResources());
+
+        // Framework extensions are wired to the system bundle, the resolver cannot attach them to a resolved host
+        Map<Resource, List<Wire>> extwires = Collections.emptyMap();
+        if (applyResults) {
+            FrameworkExtensions extensions = bundleManager.getFrameworkExtensions();
+            extwires = extensions.resolve();
+            manres.removeAll(extwires.keySet());
+            optres.removeAll(extwires.keySet());
+
+            // Only the system bundle and the extensions are resolved while the framework is initialized
+            if (extensions.isInitializing())
+                return extwires;
+        }
+
         ResolverHookProcessor hookregs = new ResolverHookProcessor(syscontext, bundleManager.getBundles(Bundle.INSTALLED));
         try {
             // Recreate the {@link ResolveContext} with filtered resources
@@ -171,6 +192,10 @@ final class FrameworkResolverImpl implements XResolver {
                 sendBundleResolvedEvents(wiremap);
             }
 
+            if (extwires.isEmpty() == false) {
+                wiremap = new LinkedHashMap<Resource, List<Wire>>(wiremap);
+                wiremap.putAll(extwires);
+            }
             return wiremap;
         } finally {
             hookregs.end();
@@ -271,8 +296,10 @@ final class FrameworkResolverImpl implements XResolver {
                 for (BundleWire wire : entry.getValue()) {
                     BundleCapability cap = wire.getCapability();
                     if (HostNamespace.HOST_NAMESPACE.equals(cap.getNamespace())) {
-                        HostBundleRevision hostRev = (HostBundleRevision) cap.getResource();
-                        fragRev.attachToHost(hostRev);
+                        if (cap.getResource() instanceof HostBundleRevision) {
+                            HostBundleRevision hostRev = (HostBundleRevision) cap.getResource();
+                            fragRev.attachToHost(hostRev);
+                        }
                     }
                 }
             }
@@ -319,7 +346,8 @@ final class FrameworkResolverImpl implements XResolver {
     private void setBundleStatesToResolved(Map<BundleRevision, List<BundleWire>> wiremap) {
         for (Map.Entry<BundleRevision, List<BundleWire>> entry : wiremap.entrySet()) {
             Bundle bundle = entry.getKey().getBundle();
-            if (bundle instanceof AbstractBundleState) {
+            // The state of the system bundle follows the framework, it is STARTING while it gets wired
+            if (bundle instanceof AbstractBundleState && bundle.getBundleId() != 0) {
                 AbstractBundleState<?> bundleState = (AbstractBundleState<?>) bundle;
                 bundleState.changeState(Bundle.RESOLVED, 0);
             }

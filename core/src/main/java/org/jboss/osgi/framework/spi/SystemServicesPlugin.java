@@ -22,6 +22,8 @@
 package org.jboss.osgi.framework.spi;
 
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.ServiceLoader;
 import java.util.Set;
 
 import org.jboss.msc.service.ServiceBuilder;
@@ -33,8 +35,10 @@ import org.jboss.msc.value.InjectedValue;
 import org.jboss.osgi.framework.Services;
 import org.jboss.osgi.resolver.XEnvironment;
 import org.jboss.osgi.resolver.XResolver;
+import org.jboss.osgi.resolver.spi.AbstractResolver;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;
+import org.osgi.service.resolver.Resolver;
 
 /**
  * A noop placeholder for additional system services
@@ -84,6 +88,12 @@ public class SystemServicesPlugin extends AbstractIntegrationService<SystemServi
         public void registerServices(BundleContext context) {
             registrations.add(context.registerService(XEnvironment.class, injectedEnvironment.getValue(), null));
             registrations.add(context.registerService(XResolver.class, injectedResolver.getValue(), null));
+
+            // The Resolver Service resolves arbitrary resources. It does not use the framework's environment
+            Iterator<Resolver> resolvers = ServiceLoader.load(Resolver.class, AbstractResolver.class.getClassLoader()).iterator();
+            if (resolvers.hasNext()) {
+                registrations.add(context.registerService(Resolver.class, resolvers.next(), null));
+            }
         }
 
         @Override
@@ -91,6 +101,7 @@ public class SystemServicesPlugin extends AbstractIntegrationService<SystemServi
             for (ServiceRegistration<?> sreg : registrations) {
                 sreg.unregister();
             }
+            registrations.clear();
         }
     }
 }

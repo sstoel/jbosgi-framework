@@ -53,6 +53,7 @@ import org.osgi.framework.startlevel.dto.FrameworkStartLevelDTO;
 import org.osgi.framework.wiring.dto.BundleRevisionDTO;
 import org.osgi.framework.wiring.dto.BundleWireDTO;
 import org.osgi.framework.wiring.dto.BundleWiringDTO;
+import org.osgi.framework.wiring.dto.FrameworkWiringDTO;
 import org.osgi.resource.dto.CapabilityDTO;
 import org.osgi.resource.dto.RequirementDTO;
 import org.osgi.resource.dto.WireDTO;
@@ -205,11 +206,9 @@ public class BundleDTOTestCase extends OSGiFrameworkTest {
             assertEquals(1, dto.usingBundles.length);
             assertEquals(0, dto.usingBundles[0]);
 
-            // A stopped bundle has no registered services
+            // A stopped bundle has no bundle context and therefore no registered services
             bundle.stop();
-            dtos = bundle.adapt(ServiceReferenceDTO[].class);
-            assertNotNull(dtos);
-            assertEquals(0, dtos.length);
+            assertNull(bundle.adapt(ServiceReferenceDTO[].class));
         } finally {
             bundle.uninstall();
         }
@@ -246,6 +245,83 @@ public class BundleDTOTestCase extends OSGiFrameworkTest {
         } finally {
             bundle.uninstall();
         }
+    }
+
+    @Test
+    public void testFrameworkWiringDTO() throws Exception {
+        Bundle bundle = installBundle(getBundleArchive("dto-framework-wiring"));
+        try {
+            bundle.start();
+
+            Bundle systemBundle = getSystemContext().getBundle(0);
+            FrameworkWiringDTO dto = systemBundle.adapt(FrameworkWiringDTO.class);
+            assertNotNull(dto);
+            assertNull("Only for the system bundle", bundle.adapt(FrameworkWiringDTO.class));
+
+            // The ids of the revisions are the same in all DTOs
+            int sysrevId = systemBundle.adapt(BundleRevisionDTO.class).id;
+            int brevId = bundle.adapt(BundleRevisionDTO.class).id;
+            assertFalse(sysrevId == brevId);
+            assertEquals(brevId, bundle.adapt(BundleRevisionDTO.class).id);
+            assertEquals(brevId, bundle.adapt(BundleRevisionDTO[].class)[0].id);
+
+            BundleWiringDTO.NodeDTO sysnode = null, bundlenode = null;
+            for (BundleWiringDTO.NodeDTO node : dto.wirings) {
+                if (node.resource == sysrevId)
+                    sysnode = node;
+                if (node.resource == brevId)
+                    bundlenode = node;
+            }
+            assertNotNull("System wiring found", sysnode);
+            assertNotNull("Bundle wiring found", bundlenode);
+            assertTrue(bundlenode.current);
+            assertTrue(bundlenode.inUse);
+
+            // The bundle is wired to the system bundle
+            boolean wired = false;
+            for (WireDTO wire : bundlenode.requiredWires) {
+                BundleWireDTO bwire = (BundleWireDTO) wire;
+                wired |= bwire.providerWiring == sysnode.id && bwire.provider == sysrevId;
+            }
+            assertTrue("Wired to the system bundle", wired);
+
+            boolean foundSystem = false, foundBundle = false;
+            for (BundleRevisionDTO rev : dto.resources) {
+                foundSystem |= rev.id == sysrevId && rev.bundle == 0;
+                foundBundle |= rev.id == brevId && rev.bundle == bundle.getBundleId();
+            }
+            assertTrue("System revision found", foundSystem);
+            assertTrue("Bundle revision found", foundBundle);
+
+            // The wiring of an uninstalled bundle is gone after it is no longer in use
+            bundle.uninstall();
+            dto = systemBundle.adapt(FrameworkWiringDTO.class);
+            for (BundleWiringDTO.NodeDTO node : dto.wirings)
+                assertFalse("Wiring of the uninstalled bundle", node.resource == brevId);
+        } finally {
+            if (bundle.getState() != Bundle.UNINSTALLED)
+                bundle.uninstall();
+        }
+    }
+
+    @Test
+    public void testServiceReferenceDTOWithoutBundleContext() throws Exception {
+        Bundle bundle = installBundle(getBundleArchive("dto-no-context"));
+        try {
+            // A bundle that is not started does not have registered services
+            assertNull(bundle.adapt(ServiceReferenceDTO[].class));
+
+            bundle.start();
+            ServiceReferenceDTO[] dtos = bundle.adapt(ServiceReferenceDTO[].class);
+            assertNotNull(dtos);
+            assertEquals(0, dtos.length);
+
+            bundle.stop();
+            assertNull(bundle.adapt(ServiceReferenceDTO[].class));
+        } finally {
+            bundle.uninstall();
+        }
+        assertNull(bundle.adapt(ServiceReferenceDTO[].class));
     }
 
     @Test

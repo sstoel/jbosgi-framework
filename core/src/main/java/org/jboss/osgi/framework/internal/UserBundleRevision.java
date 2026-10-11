@@ -38,6 +38,7 @@ import org.jboss.osgi.framework.spi.IntegrationConstants;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.metadata.OSGiMetaData;
 import org.jboss.osgi.vfs.AbstractVFS;
+import org.jboss.osgi.vfs.VFSUtils;
 import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.wiring.BundleRevision;
@@ -67,6 +68,7 @@ abstract class UserBundleRevision extends BundleStateRevision {
             List<RevisionContent> bundleClassPath = new ArrayList<RevisionContent>();
             entriesProvider = getBundleClassPath(deployment.getRoot(), metadata, storageState, bundleClassPath);
             classPathContent = Collections.unmodifiableList(bundleClassPath);
+            recordJavaVersion(deployment.getRoot(), storageState);
         } else {
             Module module = deployment.getAttachment(MODULE_KEY);
             entriesProvider = new ModuleEntriesProvider(module);
@@ -145,6 +147,29 @@ abstract class UserBundleRevision extends BundleStateRevision {
     public Enumeration<URL> findEntries(String path, String pattern, boolean recurse) {
         getBundleState().assertNotUninstalled();
         return entriesProvider.findEntries(path, pattern, recurse);
+    }
+
+    /**
+     * The metadata and content of a multi-release bundle depend on the Java version.
+     * The bundle is therefore modified when the framework is launched with another Java version.
+     */
+    private void recordJavaVersion(VirtualFile rootFile, StorageState storageState) {
+        int javaVersion = getBundleManager().getJavaVersion();
+        boolean multiRelease;
+        try {
+            multiRelease = MultiReleaseSupport.isMultiRelease(VFSUtils.getManifest(rootFile));
+        } catch (IOException ex) {
+            multiRelease = false;
+        }
+        if (multiRelease == false || javaVersion <= 0)
+            return;
+
+        int recordedVersion = storageState.getJavaVersion();
+        if (recordedVersion != javaVersion) {
+            storageState.setJavaVersion(javaVersion);
+            if (recordedVersion > 0)
+                storageState.updateLastModified();
+        }
     }
 
     private RevisionContent getBundleClassPath(VirtualFile rootFile, OSGiMetaData metadata, StorageState storageState, List<RevisionContent> bundleClassPath) {

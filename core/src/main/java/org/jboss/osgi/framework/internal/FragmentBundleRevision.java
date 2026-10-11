@@ -116,6 +116,10 @@ final class FragmentBundleRevision extends UserBundleRevision {
                 if (highest.getVersion().compareTo(hostrev.getVersion()) < 0)
                     highest = hostrev;
             }
+            // A framework extension is attached to the system bundle
+            if (highest == null && FrameworkExtensions.isAttachedExtension(this))
+                return getEntry(path);
+
             if (highest == null)
                 throw FrameworkMessages.MESSAGES.illegalStateCannotObtainAttachedHost(this);
 

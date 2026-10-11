@@ -21,6 +21,8 @@ package org.jboss.osgi.framework.internal;
  * #L%
  */
 
+import java.util.Dictionary;
+
 import org.jboss.osgi.framework.spi.ServiceState;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.ServiceReference;
@@ -52,6 +54,11 @@ final class ServiceReferenceWrapper<T> implements ServiceReference<T> {
     @Override
     public String[] getPropertyKeys() {
         return delegate.getPropertyKeys();
+    }
+
+    @Override
+    public Dictionary<String, Object> getProperties() {
+        return delegate.getProperties();
     }
 
     @Override

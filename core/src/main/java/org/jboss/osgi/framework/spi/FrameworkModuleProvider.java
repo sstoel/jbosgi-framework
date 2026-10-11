@@ -21,8 +21,11 @@
  */
 package org.jboss.osgi.framework.spi;
 
+import java.net.URL;
+
 import org.jboss.modules.Module;
 import org.jboss.modules.ModuleIdentifier;
+import org.jboss.modules.ResourceLoader;
 import org.jboss.osgi.framework.Constants;
 
 /**
@@ -36,4 +39,22 @@ public interface FrameworkModuleProvider {
     public static final ModuleIdentifier FRAMEWORK_MODULE_IDENTIFIER = ModuleIdentifier.create(Constants.JBOSGI_PREFIX + ".framework");
 
     Module getFrameworkModule();
+
+    /**
+     * True if the content of framework extension bundles can be added to the framework module.
+     */
+    default boolean supportsExtensions() {
+        return false;
+    }
+
+    /**
+     * Add the content of a framework extension to the framework.
+     *
+     * @param contentURL The location of the extension jar, or null if the content is not a jar file
+     * @param resourceLoader The content of the extension
+     * @return True if the content was appended to the class path of the class loader that loaded the framework
+     */
+    default boolean addExtensionContent(URL contentURL, ResourceLoader resourceLoader) {
+        throw new UnsupportedOperationException();
+    }
 }

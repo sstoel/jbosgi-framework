@@ -577,13 +577,13 @@ public class FragmentTestCase extends OSGiFrameworkTest {
     @Test
     public void testExtensionFragmentFramework() throws Exception {
 
+        // A framework extension can be installed. It is not resolved here, because it would stay
+        // attached to the system bundle of the framework that the tests share
+        Bundle fragG4 = installBundle(getFragmentG4());
         try {
-            installBundle(getFragmentG4());
-            fail("BundleException expected");
-        } catch (BundleException ex) {
-            Throwable cause = ex.getCause();
-            assertNotNull("BundleException cause not null", cause);
-            assertEquals("UnsupportedOperationException expected", UnsupportedOperationException.class, cause.getClass());
+            assertBundleState(Bundle.INSTALLED, fragG4.getState());
+        } finally {
+            fragG4.uninstall();
         }
     }
 

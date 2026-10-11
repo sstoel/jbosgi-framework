@@ -26,6 +26,9 @@ import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceContainer;
 import org.jboss.msc.service.ServiceController.Mode;
 import org.jboss.msc.service.StartContext;
+import org.jboss.msc.value.InjectedValue;
+import org.jboss.osgi.framework.Constants;
+import org.jboss.osgi.framework.Services;
 import org.jboss.osgi.framework.internal.FrameworkModuleLoaderImpl;
 
 /**
@@ -36,18 +39,22 @@ import org.jboss.osgi.framework.internal.FrameworkModuleLoaderImpl;
  */
 public class FrameworkModuleLoaderPlugin extends AbstractIntegrationService<FrameworkModuleLoader> {
 
+    private final InjectedValue<BundleManager> injectedBundleManager = new InjectedValue<BundleManager>();
+
     public FrameworkModuleLoaderPlugin() {
         super(IntegrationServices.FRAMEWORK_MODULE_LOADER_PLUGIN);
     }
 
     @Override
     protected void addServiceDependencies(ServiceBuilder<FrameworkModuleLoader> builder) {
+        builder.addDependency(Services.BUNDLE_MANAGER, BundleManager.class, injectedBundleManager);
         builder.setInitialMode(Mode.ON_DEMAND);
     }
 
     @Override
     protected FrameworkModuleLoader createServiceValue(StartContext startContext) {
         ServiceContainer serviceContainer = startContext.getController().getServiceContainer();
-        return new FrameworkModuleLoaderImpl(serviceContainer);
+        Object strict = injectedBundleManager.getValue().getProperty(Constants.PROPERTY_STRICT_BOOT_DELEGATION);
+        return new FrameworkModuleLoaderImpl(serviceContainer, Boolean.parseBoolean(String.valueOf(strict)));
     }
 }

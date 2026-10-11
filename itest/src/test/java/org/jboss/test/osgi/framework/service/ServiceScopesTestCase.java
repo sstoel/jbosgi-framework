@@ -179,6 +179,48 @@ public class ServiceScopesTestCase extends OSGiFrameworkTest {
     }
 
     @Test
+    public void testPrototypeServiceObjectUseCount() throws Exception {
+        BundleContext context = getSystemContext();
+        final Runnable service = new TestService();
+        final List<Runnable> released = new ArrayList<Runnable>();
+        PrototypeServiceFactory<Runnable> factory = new PrototypeServiceFactory<Runnable>() {
+            public Runnable getService(Bundle bundle, ServiceRegistration<Runnable> registration) {
+                // The factory may return the same service object more than once
+                return service;
+            }
+
+            public void ungetService(Bundle bundle, ServiceRegistration<Runnable> registration, Runnable service) {
+                released.add(service);
+            }
+        };
+        ServiceRegistration<Runnable> sreg = context.registerService(Runnable.class, factory, null);
+        try {
+            ServiceObjects<Runnable> objects = context.getServiceObjects(sreg.getReference());
+            assertSame(service, objects.getService());
+            assertSame(service, objects.getService());
+            assertSame(service, objects.getService());
+
+            // The service object is handed back when its use count drops to zero
+            objects.ungetService(service);
+            objects.ungetService(service);
+            assertTrue(released.isEmpty());
+            objects.ungetService(service);
+            assertEquals(1, released.size());
+            assertSame(service, released.get(0));
+
+            try {
+                objects.ungetService(service);
+                fail("IllegalArgumentException expected");
+            } catch (IllegalArgumentException ex) {
+                // expected
+            }
+            assertEquals(1, released.size());
+        } finally {
+            sreg.unregister();
+        }
+    }
+
+    @Test
     public void testReleaseOnBundleStop() throws Exception {
         TestPrototypeFactory factory = new TestPrototypeFactory();
         ServiceRegistration<Runnable> sreg = getSystemContext().registerService(Runnable.class, factory, null);

@@ -48,7 +48,7 @@
                 <include>*:jboss-msc:jar</include>
                 <include>*:jboss-threads:jar</include>
                 <include>*:jboss-vfs:jar</include>
-                <include>*:org.osgi.core:jar</include>
+                <include>*:osgi.core:jar</include>
                 <include>io.smallrye.common:*:jar</include>
             </includes>
             <useStrictFiltering>true</useStrictFiltering>

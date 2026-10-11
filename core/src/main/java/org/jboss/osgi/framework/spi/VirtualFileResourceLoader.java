@@ -37,6 +37,8 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Set;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
@@ -58,14 +60,59 @@ import org.jboss.osgi.vfs.VirtualFile;
  */
 public final class VirtualFileResourceLoader implements IterableResourceLoader {
 
+    private static final String META_INF = "META-INF";
+    private static final String VERSIONS_PATH = META_INF + "/versions";
+
     private final VirtualFile virtualFile;
+    private final List<VirtualFile> versionedRoots;
+    private final boolean multiRelease;
     private final Set<String> localPaths;
 
     public VirtualFileResourceLoader(VirtualFile virtualFile) {
+        this(virtualFile, Collections.<VirtualFile> emptyList(), false);
+    }
+
+    /**
+     * Create a resource loader for a multi-release container.
+     *
+     * @param virtualFile The root of the container
+     * @param versionedRoots The versioned directories that apply to the running Java platform, highest version first
+     * @param multiRelease True if the versioned directories of the container are not part of its content
+     */
+    public VirtualFileResourceLoader(VirtualFile virtualFile, List<VirtualFile> versionedRoots, boolean multiRelease) {
         if (virtualFile == null)
             throw MESSAGES.illegalArgumentNull("virtualFile");
+        if (versionedRoots == null)
+            throw MESSAGES.illegalArgumentNull("versionedRoots");
         this.virtualFile = virtualFile;
+        this.versionedRoots = versionedRoots;
+        this.multiRelease = multiRelease;
         this.localPaths = getLocalPaths();
+    }
+
+    /**
+     * Find a child of the container. The versioned directories take precedence, except for the META-INF directory.
+     */
+    private VirtualFile findChild(String path) throws IOException {
+        if (isVersionedPath(path)) {
+            for (VirtualFile versionedRoot : versionedRoots) {
+                VirtualFile child = versionedRoot.getChild(path);
+                if (child != null)
+                    return child;
+            }
+        }
+        return virtualFile.getChild(path);
+    }
+
+    private static boolean isVersionedPath(String path) {
+        while (path.startsWith("/"))
+            path = path.substring(1);
+        return !(path.equals(META_INF) || path.startsWith(META_INF + "/"));
+    }
+
+    private static String getRelativePath(VirtualFile root, VirtualFile descendant) {
+        String path = descendant.getPathName().substring(root.getPathName().length());
+        return path.startsWith("/") ? path.substring(1) : path;
     }
 
     @Override
@@ -75,7 +122,7 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
 
     @Override
     public ClassSpec getClassSpec(String fileName) throws IOException {
-        VirtualFile child = virtualFile.getChild(fileName);
+        VirtualFile child = findChild(fileName);
         if (child == null)
             return null;
 
@@ -124,11 +171,11 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
     @Override
     public Resource getResource(String name) {
         try {
-            VirtualFile child = virtualFile.getChild(name);
+            VirtualFile child = findChild(name);
             if (child == null)
                 return null;
 
-            return new VirtualFileResource(child);
+            return new VirtualFileResource(child, name.startsWith("/") ? name.substring(1) : name);
         } catch (IOException ex) {
             return null;
         }
@@ -146,48 +193,54 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
 
     @Override
     public Iterator<Resource> iterateResources(String startPath, boolean recurse) {
-        List<Resource> result = new ArrayList<Resource>();
-        List<VirtualFile> entryPaths;
+        // An entry in a versioned directory hides the entry with the same path in the container
+        Map<String, Resource> result = new LinkedHashMap<String, Resource>();
         try {
-            VirtualFile parent = virtualFile.getChild(startPath);
-            if (parent != null) {
-                if (recurse) {
-                    entryPaths = parent.getChildrenRecursively();
-                } else {
-                    entryPaths = parent.getChildren();
+            if (isVersionedPath(startPath)) {
+                for (VirtualFile versionedRoot : versionedRoots) {
+                    collectResources(versionedRoot, startPath, recurse, result);
                 }
-            } else {
-                entryPaths = Collections.emptyList();
             }
+            collectResources(virtualFile, startPath, recurse, result);
         } catch (IOException ex) {
             throw new IllegalStateException(ex);
         }
-        for (VirtualFile entry: entryPaths) {
+        return result.values().iterator();
+    }
+
+    private void collectResources(VirtualFile root, String startPath, boolean recurse, Map<String, Resource> result) throws IOException {
+        VirtualFile parent = root.getChild(startPath);
+        if (parent == null)
+            return;
+
+        boolean versioned = root != virtualFile;
+        List<VirtualFile> entryPaths = recurse ? parent.getChildrenRecursively() : parent.getChildren();
+        for (VirtualFile entry : entryPaths) {
             try {
                 if (entry.isFile()) {
-                    result.add(new VirtualFileResource(entry));
+                    String name = getRelativePath(root, entry);
+                    if (versioned ? isVersionedPath(name) == false : isHiddenPath(name))
+                        continue;
+                    if (result.containsKey(name) == false)
+                        result.put(name, new VirtualFileResource(entry, name));
                 }
             } catch (IOException ex) {
                 throw MESSAGES.illegalArgumentCannotObtainPaths(ex, virtualFile);
             }
         }
-        return result.iterator();
+    }
+
+    // The versioned directories are not part of the content of a multi-release container
+    private boolean isHiddenPath(String path) {
+        return multiRelease && path.startsWith(VERSIONS_PATH + "/");
     }
 
     private Set<String> getLocalPaths() {
         Set<String> result = new HashSet<String>();
         try {
-            List<VirtualFile> descendants = virtualFile.getChildrenRecursively();
-            String rootPath = virtualFile.getPathName();
-            for (VirtualFile descendant : descendants) {
-                if (descendant.isFile()) {
-                    String entryPath = descendant.getPathName().substring(rootPath.length());
-                    if (entryPath.startsWith("/"))
-                        entryPath = entryPath.substring(1);
-
-                    int inx = entryPath.lastIndexOf("/");
-                    result.add(inx > 0 ? entryPath.substring(0, inx) : "");
-                }
+            collectLocalPaths(virtualFile, result);
+            for (VirtualFile versionedRoot : versionedRoots) {
+                collectLocalPaths(versionedRoot, result);
             }
         } catch (IOException ex) {
             throw MESSAGES.illegalArgumentCannotObtainPaths(ex, virtualFile);
@@ -196,6 +249,20 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
             throw MESSAGES.illegalArgumentCannotObtainPaths(null, virtualFile);
 
         return Collections.unmodifiableSet(result);
+    }
+
+    private void collectLocalPaths(VirtualFile root, Set<String> result) throws IOException {
+        boolean versioned = root != virtualFile;
+        for (VirtualFile descendant : root.getChildrenRecursively()) {
+            if (descendant.isFile()) {
+                String entryPath = getRelativePath(root, descendant);
+                if (versioned ? isVersionedPath(entryPath) == false : isHiddenPath(entryPath))
+                    continue;
+
+                int inx = entryPath.lastIndexOf("/");
+                result.add(inx > 0 ? entryPath.substring(0, inx) : "");
+            }
+        }
     }
 
     private void safeClose(final Closeable closeable) {
@@ -211,17 +278,17 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
     class VirtualFileResource implements Resource {
 
         final VirtualFile child;
+        final String name;
 
-        VirtualFileResource(VirtualFile child) {
+        VirtualFileResource(VirtualFile child, String name) {
             assert child != null : "Null child";
             this.child = child;
+            this.name = name;
         }
 
         @Override
         public String getName() {
-            String rootName = virtualFile.getPathName();
-            String pathName = child.getPathName();
-            return pathName.substring(rootName.length() + 1);
+            return name;
         }
 
         @Override

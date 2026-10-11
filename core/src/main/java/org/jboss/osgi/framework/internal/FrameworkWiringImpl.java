@@ -106,6 +106,18 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
     @Override
     public void refreshBundles(final Collection<Bundle> bundles, final FrameworkListener... listeners) {
 
+        // Refreshing a framework extension requires the framework to be launched again
+        if (refreshesFrameworkExtension(bundles)) {
+            LOGGER.debugf("Refresh of framework extension, stop the framework: %s", bundles);
+            new Thread("Framework refresh thread") {
+                @Override
+                public void run() {
+                    bundleManager.shutdownManager(FrameworkEvent.STOPPED_SYSTEM_REFRESHED);
+                }
+            }.start();
+            return;
+        }
+
         final List<Bundle> bundlesToRefresh = new ArrayList<Bundle>();
         final List<XBundle> dependencyClosure = new ArrayList<XBundle>();
 
@@ -139,6 +151,20 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             executorService.execute(runner);
             //runner.run();
         }
+    }
+
+    private boolean refreshesFrameworkExtension(Collection<Bundle> bundles) {
+        FrameworkExtensions extensions = bundleManager.getFrameworkExtensions();
+        if (extensions.hasAttachedExtensions() == false)
+            return false;
+
+        // The content of an extension stays attached to the system bundle
+        Collection<Bundle> candidates = bundles != null ? bundles : getRemovalPendingBundles();
+        for (Bundle bundle : candidates) {
+            if (bundle.getBundleId() == 0 || extensions.isAttached(bundle))
+                return true;
+        }
+        return false;
     }
 
     private void refreshBundlesInternal(List<XBundle> dependencyClosure, FrameworkListener... listeners) {

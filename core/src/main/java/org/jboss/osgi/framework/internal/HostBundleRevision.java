@@ -212,7 +212,7 @@ final class HostBundleRevision extends UserBundleRevision {
         // If this bundle cannot be resolved, then only this bundle must be searched for the specified resource
         for (RevisionContent revContent : getClassPathContent()) {
             try {
-                VirtualFile child = revContent.getVirtualFile().getChild(path);
+                VirtualFile child = getClassPathChild(revContent, path);
                 if (child != null) {
                     return child.toURL();
                 }
@@ -240,7 +240,7 @@ final class HostBundleRevision extends UserBundleRevision {
         Vector<URL> vector = new Vector<URL>();
         for (RevisionContent revContent : getClassPathContent()) {
             try {
-                VirtualFile child = revContent.getVirtualFile().getChild(path);
+                VirtualFile child = getClassPathChild(revContent, path);
                 if (child != null) {
                     vector.add(child.toURL());
                 }
@@ -251,6 +251,18 @@ final class HostBundleRevision extends UserBundleRevision {
         }
 
         return vector.isEmpty() ? null : vector.elements();
+    }
+
+    private VirtualFile getClassPathChild(RevisionContent revContent, String path) throws IOException {
+        // The versioned directories of a multi-release container take precedence
+        if (MultiReleaseSupport.isVersionedPath(path)) {
+            for (VirtualFile versionedRoot : revContent.getVersionedRoots()) {
+                VirtualFile child = versionedRoot.getChild(path);
+                if (child != null)
+                    return child;
+            }
+        }
+        return revContent.getVirtualFile().getChild(path);
     }
 
     @Override

@@ -39,6 +39,7 @@ import org.jboss.osgi.metadata.ParameterizedAttribute;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.Constants;
+import org.osgi.framework.namespace.ExecutionEnvironmentNamespace;
 import org.osgi.framework.namespace.NativeNamespace;
 
 /**
@@ -80,14 +81,14 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
                 throw MESSAGES.packageVersionAndSpecificationVersionMissmatch(packageName, brev);
         }
 
-        // Export or import of java.*.
+        // Export of java.*. A bundle may import java.* packages
         // Specification-version and version specified together (for the same package(s)) but with different values
         // The export statement must not specify an explicit bundle symbolic name nor bundle version
         List<PackageAttribute> exportPackages = metadata.getExportPackages();
         for (PackageAttribute packageAttr : exportPackages) {
             String packageName = packageAttr.getAttribute();
             if (packageName.startsWith("java."))
-                throw MESSAGES.notAllowdToExportJavaPackage(brev);
+                throw new BundleException(MESSAGES.notAllowdToExportJavaPackage(brev).getMessage(), BundleException.MANIFEST_ERROR);
 
             String versionAttr = packageAttr.getAttributeValue(Constants.VERSION_ATTRIBUTE, String.class);
             String specificationAttr = packageAttr.getAttributeValue(Constants.PACKAGE_SPECIFICATION_VERSION, String.class);
@@ -113,10 +114,12 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
                 throw MESSAGES.packageVersionAndSpecificationVersionMissmatch(packageName, brev);
         }
 
-        // Only the system bundle provides capabilities in the osgi.native namespace
+        // Only the system bundle provides capabilities in the osgi.native and osgi.ee namespaces
         for (ParameterizedAttribute capAttr : metadata.getProvidedCapabilities()) {
             if (NativeNamespace.NATIVE_NAMESPACE.equals(capAttr.getAttribute()))
                 throw new BundleException(MESSAGES.notAllowedToProvideNativeCapability(brev), BundleException.MANIFEST_ERROR);
+            if (ExecutionEnvironmentNamespace.EXECUTION_ENVIRONMENT_NAMESPACE.equals(capAttr.getAttribute()))
+                throw new BundleException(MESSAGES.notAllowedToProvideExecutionEnvironmentCapability(brev), BundleException.MANIFEST_ERROR);
         }
 
         // Verify Fragment-Host header
@@ -131,8 +134,24 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
                 if (EXTENSION_BOOTCLASSPATH.equals(extension))
                     throw MESSAGES.unsupportedBootClasspathExtension();
 
-                if (EXTENSION_FRAMEWORK.equals(extension))
+            }
+
+            // A fragment of the system bundle is a framework extension
+            if (SYSTEM_BUNDLE_SYMBOLICNAME.equals(fragmentHost)) {
+                if (brev instanceof BundleStateRevision && !((BundleStateRevision) brev).getBundleManager().getFrameworkExtensions().isSupported())
                     throw MESSAGES.unsupportedFrameworkExtension();
+
+                String illegalHeader = null;
+                if (!isEmpty(metadata.getRequireBundles()))
+                    illegalHeader = Constants.REQUIRE_BUNDLE;
+                else if (!isEmpty(metadata.getBundleNativeCode()))
+                    illegalHeader = Constants.BUNDLE_NATIVECODE;
+                else if (!isEmpty(metadata.getDynamicImports()))
+                    illegalHeader = Constants.DYNAMICIMPORT_PACKAGE;
+                else if (metadata.getBundleActivator() != null)
+                    illegalHeader = Constants.BUNDLE_ACTIVATOR;
+                if (illegalHeader != null)
+                    throw new BundleException(MESSAGES.illegalFrameworkExtensionHeader(illegalHeader, brev), BundleException.MANIFEST_ERROR);
             }
         }
 
@@ -146,5 +165,9 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
         // [TODO] The manifest lists a OSGI-INF/permission.perm file but no such file is present.
 
         // [TODO] Requiring the same bundle symbolic name more than once
+    }
+
+    private static boolean isEmpty(List<?> list) {
+        return list == null || list.isEmpty();
     }
 }

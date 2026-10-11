@@ -38,6 +38,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.ServiceState;
@@ -78,6 +79,7 @@ final class FrameworkEventsImpl implements FrameworkEvents {
 
     private final BundleManagerPlugin bundleManager;
     private final ExecutorService executorService;
+    private final AtomicInteger pendingFrameworkEvents = new AtomicInteger();
 
     /** The bundleState listeners */
     private final Map<XBundle, List<BundleListenerRegistration>> bundleListeners = new ConcurrentHashMap<XBundle, List<BundleListenerRegistration>>();
@@ -497,7 +499,7 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         if (listeners.isEmpty())
             return;
 
-        Runnable runner = new Runnable() {
+        final Runnable runner = new Runnable() {
             @Override
             public void run() {
                 // Call the listeners
@@ -520,7 +522,42 @@ final class FrameworkEventsImpl implements FrameworkEvents {
             }
         };
         if (!executorService.isShutdown()) {
-            executorService.execute(runner);
+            synchronized (pendingFrameworkEvents) {
+                pendingFrameworkEvents.incrementAndGet();
+            }
+            executorService.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        runner.run();
+                    } finally {
+                        synchronized (pendingFrameworkEvents) {
+                            pendingFrameworkEvents.decrementAndGet();
+                            pendingFrameworkEvents.notifyAll();
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    /**
+     * Wait until the framework events that were fired so far are delivered.
+     */
+    void awaitFrameworkEvents() {
+        long timeout = System.currentTimeMillis() + 10000;
+        synchronized (pendingFrameworkEvents) {
+            while (pendingFrameworkEvents.get() > 0 && !executorService.isShutdown()) {
+                long remaining = timeout - System.currentTimeMillis();
+                if (remaining <= 0)
+                    break;
+                try {
+                    pendingFrameworkEvents.wait(remaining);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
         }
     }
 

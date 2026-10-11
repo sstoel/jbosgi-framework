@@ -21,12 +21,16 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,9 +53,11 @@ import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleRevisions;
 import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
+import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.framework.wiring.dto.BundleRevisionDTO;
 import org.osgi.framework.wiring.dto.BundleWireDTO;
 import org.osgi.framework.wiring.dto.BundleWiringDTO;
+import org.osgi.framework.wiring.dto.FrameworkWiringDTO;
 import org.osgi.resource.dto.CapabilityDTO;
 import org.osgi.resource.dto.CapabilityRefDTO;
 import org.osgi.resource.dto.RequirementDTO;
@@ -108,12 +114,15 @@ public final class DTOFactory {
             }
             return (T) result.toArray(new BundleWiringDTO[result.size()]);
         } else if (type == ServiceReferenceDTO[].class) {
-            if (uninstalled)
+            // Only a bundle with a valid bundle context has registered services
+            if (uninstalled || bundle.getBundleContext() == null)
                 return null;
             List<ServiceReferenceDTO> result = getServiceReferenceDTOs(bundle);
             return (T) result.toArray(new ServiceReferenceDTO[result.size()]);
         } else if (type == FrameworkDTO.class && bundle.getBundleId() == 0) {
             return (T) createFrameworkDTO(bundle);
+        } else if (type == FrameworkWiringDTO.class && bundle.getBundleId() == 0) {
+            return (T) createFrameworkWiringDTO(bundle);
         } else if (type == FrameworkStartLevelDTO.class && bundle.getBundleId() == 0) {
             FrameworkStartLevel fwkStartLevel = bundle.adapt(FrameworkStartLevel.class);
             if (fwkStartLevel == null)
@@ -204,6 +213,31 @@ public final class DTOFactory {
         return dto;
     }
 
+    private static FrameworkWiringDTO createFrameworkWiringDTO(XBundle systemBundle) {
+        BundleManager bundleManager = systemBundle.adapt(BundleManager.class);
+        if (bundleManager == null)
+            return null;
+
+        // Bundles that are uninstalled may still have wirings that are in use
+        Set<Bundle> bundles = new LinkedHashSet<Bundle>(bundleManager.getBundles());
+        FrameworkWiring frameworkWiring = systemBundle.adapt(FrameworkWiring.class);
+        if (frameworkWiring != null)
+            bundles.addAll(frameworkWiring.getRemovalPendingBundles());
+
+        Graph graph = new Graph();
+        for (Bundle bundle : bundles) {
+            for (BundleRevision brev : getRevisions(bundle)) {
+                BundleWiring wiring = brev.getWiring();
+                if (wiring != null && wiring.isInUse())
+                    graph.getNodeDTO(wiring);
+            }
+        }
+        FrameworkWiringDTO dto = new FrameworkWiringDTO();
+        dto.wirings = new HashSet<BundleWiringDTO.NodeDTO>(graph.nodes.values());
+        dto.resources = new HashSet<BundleRevisionDTO>(graph.resources.values());
+        return dto;
+    }
+
     private static BundleWiringDTO createBundleWiringDTO(BundleWiring wiring) {
         Graph graph = new Graph();
         BundleWiringDTO dto = new BundleWiringDTO();
@@ -256,21 +290,14 @@ public final class DTOFactory {
     }
 
     /**
-     * The revisions and wirings that are reachable from one DTO. Ids are only unique within that DTO.
+     * The revisions and wirings that are reachable from one DTO.
      */
     private static final class Graph {
 
         final Map<BundleRevision, BundleRevisionDTO> resources = new IdentityHashMap<BundleRevision, BundleRevisionDTO>();
         final Map<BundleWiring, BundleWiringDTO.NodeDTO> nodes = new IdentityHashMap<BundleWiring, BundleWiringDTO.NodeDTO>();
-        private final Map<Object, Integer> identities = new IdentityHashMap<Object, Integer>();
-
         private int getIdentity(Object obj) {
-            Integer id = identities.get(obj);
-            if (id == null) {
-                id = identities.size() + 1;
-                identities.put(obj, id);
-            }
-            return id;
+            return Identities.get(obj);
         }
 
         BundleRevisionDTO getRevisionDTO(BundleRevision brev) {
@@ -373,6 +400,55 @@ public final class DTOFactory {
             for (Map.Entry<String, Object> entry : attributes.entrySet())
                 result.put(entry.getKey(), convertValue(entry.getValue()));
             return result;
+        }
+    }
+
+    /**
+     * The ids of the objects that are represented in DTOs.
+     *
+     * An object keeps its id for as long as it is reachable, so that the DTOs
+     * that are obtained from different bundles can be related to each other.
+     */
+    private static final class Identities {
+
+        private static final Map<Key, Integer> ids = new HashMap<Key, Integer>();
+        private static final ReferenceQueue<Object> queue = new ReferenceQueue<Object>();
+        private static int lastId;
+
+        static synchronized int get(Object obj) {
+            Reference<?> stale;
+            while ((stale = queue.poll()) != null)
+                ids.remove(stale);
+
+            Integer id = ids.get(new Key(obj, null));
+            if (id == null) {
+                id = ++lastId;
+                ids.put(new Key(obj, queue), id);
+            }
+            return id;
+        }
+
+        private static final class Key extends WeakReference<Object> {
+
+            private final int hashCode;
+
+            Key(Object obj, ReferenceQueue<Object> queue) {
+                super(obj, queue);
+                hashCode = System.identityHashCode(obj);
+            }
+
+            @Override
+            public int hashCode() {
+                return hashCode;
+            }
+
+            @Override
+            public boolean equals(Object other) {
+                if (other == this)
+                    return true;
+                Object obj = get();
+                return obj != null && other instanceof Key && ((Key) other).get() == obj;
+            }
         }
     }
 }

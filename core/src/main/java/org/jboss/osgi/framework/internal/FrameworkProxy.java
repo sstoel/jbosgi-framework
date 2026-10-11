@@ -39,6 +39,7 @@ import org.jboss.msc.service.ServiceTarget;
 import org.jboss.osgi.framework.Constants;
 import org.jboss.osgi.framework.spi.FrameworkBuilder;
 import org.jboss.osgi.framework.spi.FrameworkBuilder.FrameworkPhase;
+import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.ServiceTracker;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
@@ -119,6 +120,11 @@ final class FrameworkProxy implements Framework {
      */
     @Override
     public void init() throws BundleException {
+        init(new FrameworkListener[0]);
+    }
+
+    @Override
+    public void init(final FrameworkListener... frameworkListeners) throws BundleException {
 
         // This method does nothing if called when this Framework is in the STARTING, ACTIVE or STOPPING state
         int state = getState();
@@ -149,6 +155,27 @@ final class FrameworkProxy implements Framework {
 
             bundleManager.setFramework(this);
 
+            if (frameworkListeners != null) {
+                for (FrameworkListener listener : frameworkListeners) {
+                    if (listener != null)
+                        bundleManager.getFrameworkState().getFrameworkEvents().addFrameworkListener(getSystemBundle(), listener);
+                }
+            }
+
+            // The last step is to resolve the framework extensions and to start their activators
+            bundleManager.getFrameworkExtensions().initialize();
+
+            // The given listeners get the events that are fired by this method, and no events after it returned
+            FrameworkEvents events = bundleManager.getFrameworkState().getFrameworkEvents();
+            if (events instanceof FrameworkEventsImpl)
+                ((FrameworkEventsImpl) events).awaitFrameworkEvents();
+            if (frameworkListeners != null) {
+                for (FrameworkListener listener : frameworkListeners) {
+                    if (listener != null)
+                        events.removeFrameworkListener(getSystemBundle(), listener);
+                }
+            }
+
         } catch (BundleException ex) {
             if (bundleManager != null)
                 bundleManager.setManagerState(Bundle.INSTALLED);
@@ -160,14 +187,6 @@ final class FrameworkProxy implements Framework {
             throw MESSAGES.cannotInitializeFramework(ex);
         } finally {
             firstInit = false;
-        }
-    }
-
-    @Override
-    public void init(final FrameworkListener... frameworkListeners) throws BundleException {
-        init();
-        for (FrameworkListener listener : frameworkListeners) {
-            bundleManager.getFrameworkState().getFrameworkEvents().addFrameworkListener(getSystemBundle(), listener);
         }
     }
 

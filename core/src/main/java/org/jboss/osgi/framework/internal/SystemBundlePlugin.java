@@ -88,6 +88,10 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
         StorageState storageState = null;
         BundleManagerPlugin bundleManager = frameworkState.getBundleManager();
         try {
+            // Framework extensions need a framework module that can take their content
+            if (frameworkState.getFrameworkModuleProvider().supportsExtensions())
+                bundleManager.setProperty(Constants.SUPPORTS_FRAMEWORK_EXTENSION, Boolean.TRUE.toString());
+
             OSGiMetaData metadata = createMetaData(bundleManager);
             storageState = createStorageState();
             SystemBundleRevision brev = new SystemBundleRevision(frameworkState, metadata, storageState);
@@ -152,16 +156,34 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
             }
             for (Entry<String, List<String>> entry : nameversion.entrySet()) {
                 String namepart = entry.getKey();
-                List<String> versions = entry.getValue();
-                String capspec = EXECUTION_ENVIRONMENT_NAMESPACE + ";" + EXECUTION_ENVIRONMENT_NAMESPACE + "=\"" + namepart + "\"";
-                if (versions.size() > 0) {
-                    String vlist = "";
-                    for (String version : versions) {
-                        vlist += "," + version;
-                    }
-                    capspec += ";version" + (versions.size() > 1 ? ":List<Version>=\"" : "=\"") + vlist.substring(1) + "\"";
+
+                // The 1.x versions and the versions since Java 9 are provided by separate capabilities, so that
+                // a requirement for a version below 2.0, like (&(version>=1.3)(!(version>=2.0))), can be satisfied
+                List<String> legacy = new ArrayList<String>();
+                List<String> modern = new ArrayList<String>();
+                for (String version : entry.getValue()) {
+                    if (version.equals("1") || version.startsWith("1."))
+                        legacy.add(version);
+                    else
+                        modern.add(version);
                 }
-                builder.addProvidedCapabilities(capspec);
+                List<List<String>> groups = new ArrayList<List<String>>();
+                if (legacy.isEmpty() == false)
+                    groups.add(legacy);
+                if (modern.isEmpty() == false || legacy.isEmpty())
+                    groups.add(modern);
+
+                for (List<String> versions : groups) {
+                    String capspec = EXECUTION_ENVIRONMENT_NAMESPACE + ";" + EXECUTION_ENVIRONMENT_NAMESPACE + "=\"" + namepart + "\"";
+                    if (versions.size() > 0) {
+                        String vlist = "";
+                        for (String version : versions) {
+                            vlist += "," + version;
+                        }
+                        capspec += ";version" + (versions.size() > 1 ? ":List<Version>=\"" : "=\"") + vlist.substring(1) + "\"";
+                    }
+                    builder.addProvidedCapabilities(capspec);
+                }
             }
         } else {
             // Register capabilities for the OSGi/Minimim execution environments the Framework is known to be backward compatible with

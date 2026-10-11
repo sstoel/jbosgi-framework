@@ -24,11 +24,13 @@ package org.jboss.osgi.framework.internal;
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
 import java.util.Enumeration;
+import java.util.List;
 import java.util.Vector;
 
 import org.jboss.osgi.metadata.OSGiMetaData;
@@ -48,6 +50,7 @@ final class RevisionContent implements EntriesProvider {
 
     private final UserBundleRevision userRev;
     private final VirtualFile virtualFile;
+    private final List<VirtualFile> versionedRoots;
     private final String identity;
     private final int contentId;
     private boolean closedMarker;
@@ -57,6 +60,7 @@ final class RevisionContent implements EntriesProvider {
         assert rootFile != null : "Null rootFile";
         this.userRev = brev;
         this.virtualFile = rootFile;
+        this.versionedRoots = MultiReleaseSupport.getVersionedRoots(rootFile, brev.getBundleManager().getJavaVersion());
         this.contentId = contentId;
 
         String symbolicName = metadata.getBundleSymbolicName();
@@ -106,6 +110,39 @@ final class RevisionContent implements EntriesProvider {
     VirtualFile getVirtualFile() {
         assertNotClosed();
         return virtualFile;
+    }
+
+    /**
+     * The versioned directories of a multi-release container that apply to the running Java platform, highest version first.
+     */
+    List<VirtualFile> getVersionedRoots() {
+        return versionedRoots;
+    }
+
+    boolean isMultiRelease() {
+        return MultiReleaseSupport.isMultiRelease(virtualFile, userRev.getBundleManager().getJavaVersion());
+    }
+
+    /**
+     * Get a resource from this class path entry.
+     *
+     * Other than {@link #getEntry(String)} this searches the versioned directories of a multi-release container.
+     */
+    URL getResource(String path) {
+        assertNotClosed();
+        try {
+            if (MultiReleaseSupport.isVersionedPath(path)) {
+                for (VirtualFile versionedRoot : versionedRoots) {
+                    VirtualFile child = versionedRoot.getChild(path);
+                    if (child != null)
+                        return getBundleURL(child);
+                }
+            }
+        } catch (IOException ex) {
+            LOGGER.errorCannotGetEntry(ex, path, userRev);
+            return null;
+        }
+        return getEntry(path);
     }
 
     @Override
@@ -180,6 +217,8 @@ final class RevisionContent implements EntriesProvider {
             protected URLConnection openConnection(URL url) throws IOException {
                 String path = url.getPath();
                 VirtualFile real = (orgPath.equals(path) ? child : virtualFile.getChild(path));
+                if (real == null)
+                    throw new FileNotFoundException(url.toExternalForm());
                 return real.getStreamURL().openConnection();
             }
 

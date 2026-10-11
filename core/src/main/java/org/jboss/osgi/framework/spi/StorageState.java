@@ -54,6 +54,7 @@ public class StorageState {
     public static final String PROPERTY_PERSISTENTLY_STARTED = "PersistentlyStarted";
     public static final String PROPERTY_ACTIVATION_POLICY_USED = "ActivationPolicyUsed";
     public static final String PROPERTY_START_LEVEL = "StartLevel";
+    public static final String PROPERTY_JAVA_VERSION = "JavaVersion";
     public static final String BUNDLE_PERSISTENT_PROPERTIES = "bundle-persistent.properties";
     public static final String BUNDLE_DIRECTORY_PREFIX = "bundle-";
 
@@ -183,6 +184,25 @@ public class StorageState {
     public int getStartLevel() {
         String value = props.getProperty(PROPERTY_START_LEVEL);
         return Integer.parseInt(value);
+    }
+
+    /**
+     * The Java version that the content of a multi-release bundle was last used with.
+     *
+     * @return zero if the version is not recorded
+     */
+    public int getJavaVersion() {
+        String value = props.getProperty(PROPERTY_JAVA_VERSION);
+        try {
+            return value != null ? Integer.parseInt(value) : 0;
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
+    }
+
+    public void setJavaVersion(int version) {
+        getProperties().setProperty(PROPERTY_JAVA_VERSION, Integer.toString(version));
+        writeProperties();
     }
 
     public void updateLastModified() {

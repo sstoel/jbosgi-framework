@@ -76,7 +76,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private final ServiceRegistration<S> factoryRegistration;
     private Set<XBundle> usingBundles;
     private Map<Long, ServiceFactoryHolder<S>> factoryValues;
-    private Map<Long, Set<S>> prototypeValues;
+    private Map<Long, Map<S, Integer>> prototypeValues;
 
     // The properties
     private CaseInsensitiveDictionary prevProperties;
@@ -205,7 +205,9 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     }
 
     /**
-     * Get a new service object from the {@link PrototypeServiceFactory}
+     * Get a service object from the {@link PrototypeServiceFactory}
+     *
+     * The factory may return a service object that the bundle already holds. Service objects are therefore use counted.
      */
     @SuppressWarnings("unchecked")
     S getPrototypeValue(XBundle bundle) {
@@ -223,21 +225,30 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
             serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, sex);
             return null;
         }
+        boolean unregistered = false;
+        boolean heldValue = false;
         synchronized (this) {
             // The service may have been unregistered while the factory was called
+            Map<S, Integer> values = prototypeValues != null ? prototypeValues.get(bundle.getBundleId()) : null;
             if (isUnregistered()) {
-                ungetPrototypeValueInternal(bundle, result);
-                return null;
-            }
-            if (prototypeValues == null)
-                prototypeValues = new HashMap<Long, Set<S>>();
+                unregistered = true;
+                heldValue = values != null && values.containsKey(result);
+            } else {
+                if (prototypeValues == null)
+                    prototypeValues = new HashMap<Long, Map<S, Integer>>();
 
-            Set<S> values = prototypeValues.get(bundle.getBundleId());
-            if (values == null) {
-                values = Collections.newSetFromMap(new IdentityHashMap<S, Boolean>());
-                prototypeValues.put(bundle.getBundleId(), values);
+                if (values == null) {
+                    values = new IdentityHashMap<S, Integer>();
+                    prototypeValues.put(bundle.getBundleId(), values);
+                }
+                Integer useCount = values.get(result);
+                values.put(result, useCount != null ? useCount + 1 : 1);
             }
-            values.add(result);
+        }
+        if (unregistered) {
+            if (heldValue == false)
+                ungetPrototypeValueInternal(bundle, result);
+            return null;
         }
         BundleServices.get(bundle).addPrototypeServiceInUse(this);
         addUsingBundle(bundle);
@@ -251,10 +262,17 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
      */
     boolean ungetPrototypeValue(XBundle bundle, S value) {
         synchronized (this) {
-            Set<S> values = prototypeValues != null ? prototypeValues.get(bundle.getBundleId()) : null;
-            if (values == null || values.remove(value) == false)
+            Map<S, Integer> values = prototypeValues != null ? prototypeValues.get(bundle.getBundleId()) : null;
+            Integer useCount = values != null ? values.get(value) : null;
+            if (useCount == null)
                 return false;
 
+            // The factory gets the service object back when the bundle no longer uses it
+            if (useCount > 1) {
+                values.put(value, useCount - 1);
+                return true;
+            }
+            values.remove(value);
             if (values.isEmpty())
                 prototypeValues.remove(bundle.getBundleId());
         }
@@ -272,12 +290,12 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
      * Release all prototype service objects held by the given bundle
      */
     void releasePrototypeValues(XBundle bundle) {
-        Set<S> values;
+        Map<S, Integer> values;
         synchronized (this) {
             values = prototypeValues != null ? prototypeValues.remove(bundle.getBundleId()) : null;
         }
         if (values != null) {
-            for (S value : values)
+            for (S value : values.keySet())
                 ungetPrototypeValueInternal(bundle, value);
         }
         BundleServices.get(bundle).removePrototypeServiceInUse(this);
@@ -349,6 +367,12 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
                 result.add(keys.nextElement());
         }
         return result.toArray(new String[result.size()]);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Dictionary<String, Object> getProperties() {
+        return new MutableServiceProperties(currProperties);
     }
 
     @Override

@@ -60,14 +60,20 @@ public final class StorageManagerImpl implements StorageManager {
         this.bundleManager = (BundleManagerPlugin) bundleManager;
         String dirName = (String) bundleManager.getProperty(Constants.FRAMEWORK_STORAGE);
         if (dirName == null) {
-            try {
-                File storageDir = new File("./osgi-store");
-                dirName = storageDir.getCanonicalPath();
-            } catch (IOException ex) {
-                throw MESSAGES.illegalStateCannotCreateStorageArea(ex);
-            }
+            dirName = getDefaultStorageArea();
         }
         this.storageArea = new File(dirName).getAbsoluteFile();
+    }
+
+    /**
+     * The storage area that is used when {@link Constants#FRAMEWORK_STORAGE} is not configured.
+     */
+    static String getDefaultStorageArea() {
+        try {
+            return new File("./osgi-store").getCanonicalPath();
+        } catch (IOException ex) {
+            throw MESSAGES.illegalStateCannotCreateStorageArea(ex);
+        }
     }
 
     @Override

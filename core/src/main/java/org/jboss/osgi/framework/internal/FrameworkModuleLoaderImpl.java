@@ -27,11 +27,14 @@ import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
+import org.jboss.modules.DependencySpec;
+import org.jboss.modules.ModuleDependencySpec;
 import org.jboss.modules.Module;
 import org.jboss.modules.ModuleIdentifier;
 import org.jboss.modules.ModuleLoadException;
@@ -67,9 +70,34 @@ public final class FrameworkModuleLoaderImpl extends ModuleLoader implements Fra
 
     private final Map<ModuleIdentifier, ModuleHolder> moduleSpecs = new ConcurrentHashMap<ModuleIdentifier, ModuleHolder>();
     private final ServiceRegistry serviceRegistry;
+    private final boolean strictBootDelegation;
 
     public FrameworkModuleLoaderImpl(ServiceRegistry serviceRegistry) {
+        this(serviceRegistry, false);
+    }
+
+    /**
+     * @param strictBootDelegation If true, bundle modules do not get the dependency on the java.base module that
+     *        every module has by default. Packages like javax.net are then only visible when they are imported
+     *        or configured for boot delegation.
+     */
+    public FrameworkModuleLoaderImpl(ServiceRegistry serviceRegistry, boolean strictBootDelegation) {
         this.serviceRegistry = serviceRegistry;
+        this.strictBootDelegation = strictBootDelegation;
+    }
+
+    private void removeBaseDependency(Module module) throws ModuleLoadException {
+        List<DependencySpec> dependencies = new ArrayList<DependencySpec>();
+        boolean removed = false;
+        for (DependencySpec dependency : getDependencies(module)) {
+            if (dependency instanceof ModuleDependencySpec && "java.base".equals(((ModuleDependencySpec) dependency).getName())) {
+                removed = true;
+            } else {
+                dependencies.add(dependency);
+            }
+        }
+        if (removed)
+            setAndRelinkDependencies(module, dependencies);
     }
 
     @Override
@@ -99,6 +127,8 @@ public final class FrameworkModuleLoaderImpl extends ModuleLoader implements Fra
                 module = moduleHolder.getModule();
                 if (module == null) {
                     module = loadModuleLocal(identifier);
+                    if (strictBootDelegation)
+                        removeBaseDependency(module);
                     moduleHolder.setModule(module);
                 }
             }

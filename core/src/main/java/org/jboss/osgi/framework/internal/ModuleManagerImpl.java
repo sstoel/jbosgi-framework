@@ -110,6 +110,10 @@ public final class ModuleManagerImpl implements ModuleManager {
     @Override
     public ModuleIdentifier getModuleIdentifier(final XBundleRevision brev) {
         assert brev != null : "Null resource";
+        // The content of a framework extension is part of the framework module
+        if (FrameworkExtensions.isAttachedExtension(brev))
+            return getFrameworkModule().getIdentifier();
+
         assert !brev.isFragment() : "A fragment is not a module";
 
         ModuleIdentifier identifier = brev.getAttachment(IntegrationConstants.MODULE_IDENTIFIER_KEY);

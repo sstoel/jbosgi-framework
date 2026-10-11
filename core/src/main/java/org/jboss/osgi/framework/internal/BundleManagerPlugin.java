@@ -125,7 +125,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     // The framework vendor
     private static String OSGi_FRAMEWORK_VENDOR = "jboss.org";
     // The framework version. This is the version of the org.osgi.framework package in R6
-    private static String OSGi_FRAMEWORK_VERSION = "1.8";
+    private static String OSGi_FRAMEWORK_VERSION = "1.9";
 
     enum UniquenessPolicy {
         // Specifies the framework will allow multiple bundles to be installed having the same symbolic name and version.
@@ -164,6 +164,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     private SystemBundleState cachedSystemBundle;
     private ServiceTarget serviceTarget;
     private int stoppedEvent;
+    private final FrameworkExtensions frameworkExtensions = new FrameworkExtensions(this);
 
     @SuppressWarnings("deprecation")
     BundleManagerPlugin(ServiceContainer serviceContainer, FrameworkBuilder frameworkBuilder) {
@@ -191,6 +192,10 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             setProperty(Constants.FRAMEWORK_UUID, UUID.randomUUID().toString());
         if (getProperty(Constants.FRAMEWORK_BSNVERSION) == null)
             setProperty(Constants.FRAMEWORK_BSNVERSION, Constants.FRAMEWORK_BSNVERSION_MANAGED);
+        if (getProperty(Constants.FRAMEWORK_STORAGE) == null)
+            setProperty(Constants.FRAMEWORK_STORAGE, StorageManagerImpl.getDefaultStorageArea());
+        if (getProperty(Constants.FRAMEWORK_SYSTEMPACKAGES) == null)
+            setProperty(Constants.FRAMEWORK_SYSTEMPACKAGES, String.join(",", SystemPathsImpl.getDefaultSystemPackages()));
 
         setProperty(Constants.FRAMEWORK_VENDOR, OSGi_FRAMEWORK_VENDOR);
         setProperty(Constants.FRAMEWORK_VERSION, OSGi_FRAMEWORK_VERSION);
@@ -351,6 +356,14 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         managerState.set(state);
     }
 
+    /**
+     * The major version of the Java platform that the framework runs on.
+     * This is taken from the java.specification.version framework property.
+     */
+    int getJavaVersion() {
+        return MultiReleaseSupport.parseJavaVersion((String) getProperty(MultiReleaseSupport.JAVA_SPECIFICATION_VERSION));
+    }
+
     @Override
     public Object getProperty(String key) {
         Object value = properties.get(key);
@@ -503,6 +516,13 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             if (metadata == null) {
                 DeploymentProvider plugin = getFrameworkState().getDeploymentProvider();
                 metadata = plugin.createOSGiMetaData(deployment);
+            }
+
+            // Apply the supplemental manifest of a multi-release bundle
+            OSGiMetaData supplemented = MultiReleaseSupport.getSupplementedMetaData(deployment.getRoot(), metadata, getJavaVersion());
+            if (supplemented != metadata) {
+                metadata = supplemented;
+                deployment.putAttachment(IntegrationConstants.OSGI_METADATA_KEY, metadata);
             }
 
             // Create the bundle revision
@@ -817,7 +837,20 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             throw MESSAGES.illegalStateFrameworkAlreadyStopped();
     }
 
+    FrameworkExtensions getFrameworkExtensions() {
+        return frameworkExtensions;
+    }
+
     void shutdownManager(boolean stopForUpdate) {
+        shutdownManager(stopForUpdate ? FrameworkEvent.STOPPED_UPDATE : FrameworkEvent.STOPPED);
+    }
+
+    /**
+     * Stop the framework.
+     *
+     * @param stoppedEventType The type of the event that tells why the framework stopped
+     */
+    void shutdownManager(int stoppedEventType) {
 
         // If the Framework is not STARTING and not ACTIVE there is nothing to do
         int state = getManagerState();
@@ -826,7 +859,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
         LOGGER.debugf("Stop framework");
 
-        stoppedEvent = stopForUpdate ? FrameworkEvent.STOPPED_UPDATE : FrameworkEvent.STOPPED;
+        stoppedEvent = stoppedEventType;
         getSystemBundle().changeState(Bundle.STOPPING);
         setManagerState(Bundle.STOPPING);
 
@@ -850,6 +883,9 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         } catch (InterruptedException ex) {
             // ignore
         }
+
+        // Stop the extension bundle activators before event handling is disabled
+        frameworkExtensions.stopActivators();
 
         // Shutdown all executor services
         synchronized (executorServices) {
@@ -916,12 +952,17 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
                     execEnvironments.add("JavaSE-1.6");
                 if (Java.isCompatible(Java.VERSION_1_7))
                     execEnvironments.add("JavaSE-1.7");
-                if (Java.isCompatible(Java.VERSION_1_8))
+                if (Java.isCompatible(Java.VERSION_1_8)) {
                     execEnvironments.add("JavaSE-1.8");
+                    // The compact profiles of Java 8 are subsets of every later Java platform
+                    execEnvironments.add("JavaSE/compact1-1.8");
+                    execEnvironments.add("JavaSE/compact2-1.8");
+                    execEnvironments.add("JavaSE/compact3-1.8");
+                }
                 if (Java.isCompatible(Java.VERSION_9))
                     execEnvironments.add("JavaSE-9");
                 if (Java.isCompatible(Java.VERSION_10))
-                    execEnvironments.add("JavaSE-9");
+                    execEnvironments.add("JavaSE-10");
                 if (Java.isCompatible(Java.VERSION_11))
                     execEnvironments.add("JavaSE-11");
                 if (Java.isCompatible(Java.VERSION_12))

@@ -33,7 +33,7 @@
     <parent>
         <groupId>org.jboss.osgi.framework</groupId>
         <artifactId>jbosgi-framework-parent</artifactId>
-        <version>6.6.0.Final</version>
+        <version>6.7.0.Final</version>
     </parent>
 
     <name>JBossOSGi Framework Aggregated</name>
@@ -140,7 +140,7 @@
                                 </artifactItem>
                                 <artifactItem>
                                     <groupId>org.osgi</groupId>
-                                    <artifactId>org.osgi.core</artifactId>
+                                    <artifactId>osgi.core</artifactId>
                                 </artifactItem>
                             </artifactItems>
                             <outputDirectory>${project.build.directory}/test-libs</outputDirectory>
