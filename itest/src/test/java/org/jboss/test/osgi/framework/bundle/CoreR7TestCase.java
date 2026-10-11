@@ -144,6 +144,17 @@ public class CoreR7TestCase extends OSGiFrameworkTest {
         assertFalse(resolvesWithExecutionEnvironment("ee-future", "(&(osgi.ee=JavaSE)(version>=9999))"));
     }
 
+    @Test
+    public void testExecutionEnvironmentOfRunningPlatform() throws Exception {
+        // The versions are not limited to the Java versions that the framework knows
+        int feature = Runtime.version().feature();
+        assertTrue(resolvesWithExecutionEnvironment("ee-running", "(&(osgi.ee=JavaSE)(version=" + feature + "))"));
+        assertFalse(resolvesWithExecutionEnvironment("ee-next", "(&(osgi.ee=JavaSE)(version=" + (feature + 1) + "))"));
+
+        String environments = getSystemContext().getProperty(Constants.FRAMEWORK_EXECUTIONENVIRONMENT);
+        assertTrue(environments, java.util.Arrays.asList(environments.split(",\\s*")).contains("JavaSE-" + feature));
+    }
+
     private boolean resolvesWithExecutionEnvironment(String name, final String filter) throws Exception {
         final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, name);
         archive.setManifest(new Asset() {

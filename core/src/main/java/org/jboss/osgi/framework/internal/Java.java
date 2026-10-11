@@ -120,25 +120,10 @@ public final class Java {
             Class.forName("java.util.stream.Collectors");
             version = VERSION_1_8;
 
-            // check for 1.9
+            // Since Java 9 the version is the feature version of the running platform.
+            // It is not limited to the versions that have a constant
             Class.forName("java.lang.ProcessHandle");
-            version = VERSION_9;
-
-//            // check for 1.10
-//            Class.forName("java.util.stream.Collectors");
-//            version = VERSION_1_10;
-
-            // check for 11
-            Class.forName("java.lang.invoke.ConstantBootstraps");
-            version = VERSION_11;
-
-            // check for 17
-            Class.forName("java.lang.invoke.ConstantBootstraps");
-            version = VERSION_17;
-
-            // check for 21
-            Class.forName("java.util.concurrent.ThreadPerTaskExecutor");
-            version = VERSION_21;
+            version = Runtime.version().feature() + 1;
         } catch (ClassNotFoundException ignore) {
         }
         VERSION = version;
@@ -151,6 +136,14 @@ public final class Java {
      */
     public static int getVersion() {
         return VERSION;
+    }
+
+    /**
+     * Return the feature version of the running Java platform, for example 25.
+     * This is 8 for all versions before Java 9.
+     */
+    public static int getFeatureVersion() {
+        return VERSION >= VERSION_9 ? VERSION - 1 : 8;
     }
 
     /**
