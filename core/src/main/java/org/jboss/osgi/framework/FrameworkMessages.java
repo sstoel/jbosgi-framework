@@ -337,4 +337,13 @@ public interface FrameworkMessages {
 
     @Message(id = 11292, value = "Not allowed to provide a capability in the osgi.ee namespace in: %s")
     String notAllowedToProvideExecutionEnvironmentCapability(XBundleRevision brev);
+
+    @Message(id = 11294, value = "Cannot connect bundle at location: %s")
+    BundleException cannotConnectBundle(@Cause Throwable cause, String location);
+
+    @Message(id = 11295, value = "Cannot start the activator of the module connector")
+    BundleException cannotStartConnectActivator(@Cause Throwable cause);
+
+    @Message(id = 11296, value = "Cannot access the connect content of: %s")
+    IllegalStateException illegalStateCannotAccessConnectContent(@Cause Throwable cause, XBundleRevision brev);
 }

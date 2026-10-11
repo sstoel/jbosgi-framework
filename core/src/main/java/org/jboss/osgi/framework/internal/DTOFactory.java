@@ -175,6 +175,11 @@ public final class DTOFactory {
         return dto;
     }
 
+    /** The DTO of a service reference, null when the service is not registered */
+    static ServiceReferenceDTO adaptServiceReference(ServiceReference<?> sref) {
+        return sref.getBundle() != null ? createServiceReferenceDTO(sref) : null;
+    }
+
     private static ServiceReferenceDTO createServiceReferenceDTO(ServiceReference<?> sref) {
         ServiceReferenceDTO dto = new ServiceReferenceDTO();
         dto.id = (Long) sref.getProperty(org.osgi.framework.Constants.SERVICE_ID);

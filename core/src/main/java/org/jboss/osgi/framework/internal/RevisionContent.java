@@ -162,6 +162,12 @@ final class RevisionContent implements EntriesProvider {
     public Enumeration<URL> findEntries(String path, String pattern, boolean recurse) {
         assertNotClosed();
         try {
+            if (virtualFile instanceof ConnectVirtualFile) {
+                Vector<URL> result = new Vector<URL>();
+                for (VirtualFile child : ((ConnectVirtualFile) virtualFile).findFiles(path, pattern, recurse))
+                    result.add(getBundleURL(child));
+                return result.isEmpty() ? null : result.elements();
+            }
             Enumeration<URL> urls = virtualFile.findEntries(path, pattern, recurse);
             return getBundleURLs(urls);
         } catch (IOException ex) {

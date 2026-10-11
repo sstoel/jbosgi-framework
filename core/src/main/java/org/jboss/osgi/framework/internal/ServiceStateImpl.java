@@ -48,12 +48,14 @@ import org.jboss.osgi.spi.ConstantsHelper;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.Constants;
 import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.PrototypeServiceFactory;
 import org.osgi.framework.ServiceEvent;
 import org.osgi.framework.ServiceException;
 import org.osgi.framework.ServiceFactory;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.ServiceRegistration;
+import org.osgi.framework.dto.ServiceReferenceDTO;
 
 /**
  * The service implementation.
@@ -417,6 +419,14 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
+    public <A> A adapt(Class<A> type) {
+        if (type == ServiceReferenceDTO.class)
+            return (A) DTOFactory.adaptServiceReference(this);
+        return null;
+    }
+
+    @Override
     public void addUsingBundle(XBundle bundleState) {
         synchronized (this) {
             if (usingBundles == null)
@@ -522,7 +532,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
             serviceClass = ownerClassLoader.loadClass(className);
         } catch (ClassNotFoundException e) {
             LOGGER.tracef("Registrant bundle [%s] cannot load class: %s", ownerBundle, className);
-            return true;
+            return isServiceObjectAssignableTo(targetClass, className);
         }
 
         // If the package source of the registrant bundle is equal to the package source of the specified bundle
@@ -533,6 +543,57 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         }
 
         return true;
+    }
+
+    /**
+     * The registrant bundle has no source for the package. The package source is then determined by the service object.
+     */
+    private boolean isServiceObjectAssignableTo(Class<?> targetClass, String className) {
+        Object value = isUnregistered() ? null : valueProvider.getValue();
+        if (value == null)
+            return true;
+
+        // A service factory that does not come from the registrant bundle can provide anything
+        if (value instanceof ServiceFactory) {
+            Bundle factoryBundle = FrameworkUtil.getBundle(value.getClass());
+            if (factoryBundle != ownerBundle)
+                return true;
+        }
+
+        Class<?> serviceClass = findClassBySource(value.getClass(), className, new HashSet<Class<?>>());
+        if (serviceClass != targetClass) {
+            LOGGER.tracef("Not assignable: %s", className);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Find the class with the given name as it is seen by the class or one of its super types.
+     */
+    private static Class<?> findClassBySource(Class<?> clazz, String className, Set<Class<?>> visited) {
+        if (clazz == null || visited.add(clazz) == false)
+            return null;
+        if (clazz.getName().equals(className))
+            return clazz;
+
+        ClassLoader loader = clazz.getClassLoader();
+        if (loader != null) {
+            try {
+                return loader.loadClass(className);
+            } catch (ClassNotFoundException ex) {
+                // not a source for the package
+            } catch (LinkageError ex) {
+                // not a source for the package
+            }
+        }
+        Class<?> result = findClassBySource(clazz.getSuperclass(), className, visited);
+        for (Class<?> iface : clazz.getInterfaces()) {
+            if (result != null)
+                break;
+            result = findClassBySource(iface, className, visited);
+        }
+        return result;
     }
 
     @Override

@@ -77,6 +77,11 @@ final class ServiceReferenceWrapper<T> implements ServiceReference<T> {
     }
 
     @Override
+    public <A> A adapt(Class<A> type) {
+        return delegate.adapt(type);
+    }
+
+    @Override
     public int compareTo(Object reference) {
         return delegate.compareTo(reference);
     }

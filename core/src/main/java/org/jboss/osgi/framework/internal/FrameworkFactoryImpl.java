@@ -26,16 +26,18 @@ import java.util.Map;
 import org.jboss.msc.service.ServiceController.Mode;
 import org.jboss.osgi.framework.spi.FrameworkBuilder;
 import org.jboss.osgi.framework.spi.FrameworkBuilderFactory;
+import org.osgi.framework.connect.ConnectFrameworkFactory;
+import org.osgi.framework.connect.ModuleConnector;
 import org.osgi.framework.launch.Framework;
 import org.osgi.framework.launch.FrameworkFactory;
 
 /**
- * An impementation of an OSGi {@link FrameworkFactory}
+ * An impementation of an OSGi {@link FrameworkFactory} and {@link ConnectFrameworkFactory}
  *
  * @author thomas.diesler@jboss.com
  * @since 21-Aug-2009
  */
-public class FrameworkFactoryImpl implements FrameworkFactory {
+public class FrameworkFactoryImpl implements FrameworkFactory, ConnectFrameworkFactory {
 
     /**
      * The main entry point to the Framework
@@ -49,11 +51,17 @@ public class FrameworkFactoryImpl implements FrameworkFactory {
     @Override
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public Framework newFramework(Map props) {
+        return newFramework(props, null);
+    }
+
+    @Override
+    public Framework newFramework(Map<String, String> props, ModuleConnector moduleConnector) {
 
         // [TODO] Remove this hack when doen with the craptastic TCK setup
         System.setProperty("java.util.logging.manager", "org.jboss.logmanager.LogManager");
 
         FrameworkBuilder builder = FrameworkBuilderFactory.create(props, Mode.ACTIVE);
+        builder.setModuleConnector(moduleConnector);
         return builder.createFramework();
     }
 }

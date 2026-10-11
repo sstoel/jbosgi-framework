@@ -60,6 +60,7 @@ import org.jboss.osgi.framework.spi.StartLevelPlugin;
 import org.jboss.osgi.framework.spi.StorageManagerPlugin;
 import org.jboss.osgi.framework.spi.SystemPathsPlugin;
 import org.jboss.osgi.framework.spi.SystemServicesPlugin;
+import org.osgi.framework.connect.ModuleConnector;
 import org.osgi.framework.launch.Framework;
 
 /**
@@ -77,6 +78,7 @@ public final class FrameworkBuilderImpl implements FrameworkBuilder {
     private final Mode initialMode;
     private ServiceContainer serviceContainer;
     private ServiceTarget serviceTarget;
+    private ModuleConnector moduleConnector;
     private boolean closed;
 
     public FrameworkBuilderImpl(Map<String, String> props, Mode initialMode) {
@@ -140,6 +142,16 @@ public final class FrameworkBuilderImpl implements FrameworkBuilder {
     @Override
     public Mode getInitialMode() {
         return initialMode;
+    }
+
+    @Override
+    public ModuleConnector getModuleConnector() {
+        return moduleConnector;
+    }
+
+    @Override
+    public void setModuleConnector(ModuleConnector moduleConnector) {
+        this.moduleConnector = moduleConnector;
     }
 
     @Override

@@ -179,7 +179,9 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
             result = (T) this;
         } else if (type.isAssignableFrom(BundleWiring.class)) {
             // After an uninstall the adapt method will always return null for BundleWiring
-            result = !isUninstalled() ? (T) getBundleWiring() : null;
+            // A wiring that is no longer in use is not the wiring of the bundle either
+            BundleWiring wiring = !isUninstalled() ? getBundleWiring() : null;
+            result = wiring != null && wiring.isInUse() ? (T) wiring : null;
         } else if (type.isAssignableFrom(OSGiMetaData.class)) {
             result = (T) getOSGiMetaData();
         } else if (type.isAssignableFrom(StorageState.class)) {
@@ -565,6 +567,12 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
             } catch (RuntimeException ex) {
                 result = false;
                 handleResolverException(fireEvent, BundleException.REJECTED_BY_HOOK, ex);
+            }
+
+            // A resolver hook may have removed this bundle from the resolvable bundles, which is not reported as an error
+            if (result && isResolved() == false) {
+                result = false;
+                handleResolverException(fireEvent, BundleException.RESOLVE_ERROR, new ResolutionException(MESSAGES.cannotResolveBundle(this)));
             }
         }
         return result;

@@ -40,6 +40,7 @@ import org.jboss.osgi.framework.spi.StorageManager;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.vfs.VFSUtils;
 import org.jboss.osgi.vfs.VirtualFile;
+import org.osgi.framework.BundleException;
 import org.osgi.framework.Constants;
 
 /**
@@ -78,8 +79,8 @@ public final class StorageManagerImpl implements StorageManager {
 
     @Override
     public void initialize(Map<String, Object> props, boolean firstInit) throws IOException {
-        // Cleanup the storage area
-        String storageClean = (String) props.get(Constants.FRAMEWORK_STORAGE_CLEAN);
+        // Cleanup the storage area. This is configured for the framework instance, a system property does not apply
+        String storageClean = (String) bundleManager.getConfiguredProperty(Constants.FRAMEWORK_STORAGE_CLEAN);
         if (firstInit == true && Constants.FRAMEWORK_STORAGE_CLEAN_ONFIRSTINIT.equals(storageClean)) {
             File storage = getStorageArea();
             LOGGER.debugf("Deleting storage: %s", storage.getAbsolutePath());
@@ -96,7 +97,9 @@ public final class StorageManagerImpl implements StorageManager {
         File[] storageDirs = getStorageArea().listFiles(filter);
         if (storageDirs != null) {
             for (File storageDir : storageDirs) {
-                StorageState storageState = StorageState.createStorageState(storageDir);
+                StorageState storageState = restoreStorageState(storageDir);
+                if (storageState == null)
+                    continue;
                 if (storageState.getBundleId() != 0) {
                     synchronized (storageStates) {
                         storageStates.put(storageState.getLocation(), storageState);
@@ -104,6 +107,29 @@ public final class StorageManagerImpl implements StorageManager {
                 }
             }
         }
+    }
+
+    private StorageState restoreStorageState(File storageDir) throws IOException {
+        Properties props = StorageState.loadProperties(storageDir);
+        if (Boolean.parseBoolean(props.getProperty(StorageState.PROPERTY_CONNECT_BUNDLE)) == false)
+            return StorageState.createStorageState(storageDir);
+
+        // A connect bundle exists for as long as the module connector provides its content
+        String location = props.getProperty(StorageState.PROPERTY_BUNDLE_LOCATION);
+        VirtualFile rootFile = null;
+        try {
+            rootFile = bundleManager.connect(location);
+        } catch (BundleException ex) {
+            LOGGER.debugf(ex, "Cannot connect bundle: %s", location);
+        }
+        if (rootFile == null) {
+            LOGGER.debugf("Removing connect bundle that has no content: %s", location);
+            deleteRecursive(storageDir);
+            return null;
+        }
+        StorageState storageState = new StorageState(storageDir, rootFile, props);
+        LOGGER.debugf("Restored storage state: %s", storageState);
+        return storageState;
     }
 
     @Override
@@ -131,7 +157,14 @@ public final class StorageManagerImpl implements StorageManager {
         props.put(StorageState.PROPERTY_START_LEVEL, new Integer(startlevel).toString());
         props.put(StorageState.PROPERTY_LAST_MODIFIED, new Long(System.currentTimeMillis()).toString());
 
-        StorageState storageState = StorageState.createStorageState(bundleDir, rootFile, props);
+        boolean connect = ConnectVirtualFile.isConnectFile(rootFile);
+        if (connect) {
+            props.put(StorageState.PROPERTY_CONNECT_BUNDLE, Boolean.TRUE.toString());
+            props.remove(StorageState.PROPERTY_BUNDLE_FILE);
+        } else {
+            props.remove(StorageState.PROPERTY_CONNECT_BUNDLE);
+        }
+        StorageState storageState = StorageState.createStorageState(bundleDir, rootFile, props, connect == false);
         if (storageState.getBundleId() != 0) {
             storageStates.put(storageState.getLocation(), storageState);
         }

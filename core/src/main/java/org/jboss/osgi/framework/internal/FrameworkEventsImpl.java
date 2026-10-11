@@ -641,7 +641,8 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                 try {
                     String filterstr = info.getFilter();
                     ServiceListener listener = listenerReg.getListener();
-                    if (listenerReg.isAllServiceListener() || listener instanceof UnfilteredServiceListener || listenerReg.filter.match(serviceState)) {
+                    // The filter also applies to an AllServiceListener, which is only exempt from the class space check
+                    if (listener instanceof UnfilteredServiceListener || listenerReg.filter.match(serviceState)) {
                         listener.serviceChanged(event);
                     }
 

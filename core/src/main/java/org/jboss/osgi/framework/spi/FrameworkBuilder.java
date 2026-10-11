@@ -27,6 +27,7 @@ import org.jboss.msc.service.LifecycleListener;
 import org.jboss.msc.service.ServiceContainer;
 import org.jboss.msc.service.ServiceController.Mode;
 import org.jboss.msc.service.ServiceTarget;
+import org.osgi.framework.connect.ModuleConnector;
 import org.osgi.framework.launch.Framework;
 
 /**
@@ -60,6 +61,11 @@ public interface FrameworkBuilder {
     void setServiceTarget(ServiceTarget serviceTarget);
 
     Mode getInitialMode();
+
+    /** The module connector of a connect framework, null otherwise */
+    ModuleConnector getModuleConnector();
+
+    void setModuleConnector(ModuleConnector moduleConnector);
 
     Framework createFramework();
 

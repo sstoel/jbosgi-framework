@@ -21,7 +21,11 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Dictionary;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.jboss.modules.Module;
@@ -41,6 +45,10 @@ import org.jboss.osgi.resolver.XBundleRevisionBuilderFactory;
 import org.jboss.osgi.resolver.XResource;
 import org.jboss.osgi.vfs.VFSUtils;
 import org.osgi.framework.BundleException;
+import org.osgi.framework.connect.ConnectContent;
+import org.osgi.framework.namespace.BundleNamespace;
+import org.osgi.framework.namespace.HostNamespace;
+import org.osgi.framework.namespace.IdentityNamespace;
 import org.osgi.framework.namespace.NativeNamespace;
 
 /**
@@ -51,6 +59,8 @@ import org.osgi.framework.namespace.NativeNamespace;
  * @since 29-Jun-2010
  */
 abstract class BundleStateRevision extends AbstractCommonBundleRevision {
+
+    private static final List<String> CONNECT_TAGGED_NAMESPACES = Arrays.asList(IdentityNamespace.IDENTITY_NAMESPACE, BundleNamespace.BUNDLE_NAMESPACE, HostNamespace.HOST_NAMESPACE);
 
     private final FrameworkState frameworkState;
     private final OSGiMetaData metadata;
@@ -83,6 +93,11 @@ abstract class BundleStateRevision extends AbstractCommonBundleRevision {
                     // The builder copies the attributes, the native capability needs the live view
                     if (brev instanceof SystemBundleRevision && NativeNamespace.NATIVE_NAMESPACE.equals(namespace))
                         atts = NativeNamespaceSupport.getCapabilityAttributes(frameworkState.getBundleManager());
+                    // The identity, bundle and host capabilities of a connect bundle are tagged
+                    if (CONNECT_TAGGED_NAMESPACES.contains(namespace) && storageState.isConnectBundle()) {
+                        atts = new LinkedHashMap<String, Object>(atts);
+                        atts.put(IdentityNamespace.CAPABILITY_TAGS_ATTRIBUTE, Collections.singletonList(ConnectContent.TAG_OSGI_CONNECT));
+                    }
                     return super.createCapability(resource, namespace, atts, dirs);
                 }
             };

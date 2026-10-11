@@ -183,7 +183,11 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
         VirtualFile rootFile = null;
         FrameworkState frameworkState = getFrameworkState();
         try {
-            if (input != null) {
+            // Without an input stream the module connector of a connect framework decides whether this is a connect bundle
+            if (input == null)
+                rootFile = getBundleManager().connect(location);
+
+            if (rootFile == null && input != null) {
                 try {
                     rootFile = AbstractVFS.toVirtualFile(input);
                 } catch (IOException ex) {

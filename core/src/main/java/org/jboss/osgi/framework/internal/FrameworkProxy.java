@@ -29,8 +29,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.security.cert.X509Certificate;
+import java.util.Collections;
 import java.util.Dictionary;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -48,6 +50,7 @@ import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.Version;
+import org.osgi.framework.connect.ModuleConnector;
 import org.osgi.framework.launch.Framework;
 
 /**
@@ -65,6 +68,7 @@ final class FrameworkProxy implements Framework {
     private final FrameworkBuilder frameworkBuilder;
     private BundleManagerPlugin bundleManager;
     private boolean firstInit;
+    private boolean connectorInitialized;
 
     FrameworkProxy(FrameworkBuilder frameworkBuilder) {
         this.frameworkBuilder = frameworkBuilder;
@@ -144,6 +148,14 @@ final class FrameworkProxy implements Framework {
             bundleManager = (BundleManagerPlugin) frameworkBuilder.createFrameworkServices(serviceContainer, firstInit);
             bundleManager.setManagerState(Bundle.STARTING);
 
+            // The module connector is initialized once, before it is used for anything else
+            ModuleConnector connector = frameworkBuilder.getModuleConnector();
+            if (connector != null && connectorInitialized == false) {
+                connectorInitialized = true;
+                File storage = new File((String) bundleManager.getProperty(Constants.FRAMEWORK_STORAGE));
+                connector.initialize(storage, Collections.unmodifiableMap(new HashMap<String, String>(frameworkBuilder.getProperties())));
+            }
+
             ServiceTracker serviceTracker = new ServiceTracker("Framework.init");
             frameworkBuilder.installServices(FrameworkPhase.CREATE, serviceTarget, serviceTracker);
             frameworkBuilder.installServices(FrameworkPhase.INIT, serviceTarget, serviceTracker);
@@ -161,6 +173,9 @@ final class FrameworkProxy implements Framework {
                         bundleManager.getFrameworkState().getFrameworkEvents().addFrameworkListener(getSystemBundle(), listener);
                 }
             }
+
+            // The activator of the module connector is started before the activators of the extensions
+            bundleManager.startConnectActivator();
 
             // The last step is to resolve the framework extensions and to start their activators
             bundleManager.getFrameworkExtensions().initialize();

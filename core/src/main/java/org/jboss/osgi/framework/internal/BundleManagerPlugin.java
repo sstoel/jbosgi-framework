@@ -26,6 +26,7 @@ import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 import static org.jboss.osgi.framework.internal.InternalConstants.REVISION_IDENTIFIER_KEY;
 import static org.jboss.osgi.framework.spi.IntegrationConstants.STORAGE_STATE_KEY;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
@@ -39,6 +40,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
@@ -86,7 +88,9 @@ import org.jboss.osgi.resolver.XResolveContext;
 import org.jboss.osgi.resolver.XResolver;
 import org.jboss.osgi.resolver.XResource;
 import org.jboss.osgi.vfs.VFSUtils;
+import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.FrameworkEvent;
@@ -95,6 +99,8 @@ import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.Version;
 import org.osgi.framework.VersionRange;
+import org.osgi.framework.connect.ConnectModule;
+import org.osgi.framework.connect.ModuleConnector;
 import org.osgi.framework.hooks.bundle.CollisionHook;
 import org.osgi.framework.launch.Framework;
 import org.osgi.framework.startlevel.FrameworkStartLevel;
@@ -125,7 +131,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     // The framework vendor
     private static String OSGi_FRAMEWORK_VENDOR = "jboss.org";
     // The framework version. This is the version of the org.osgi.framework package in R6
-    private static String OSGi_FRAMEWORK_VERSION = "1.9";
+    private static String OSGi_FRAMEWORK_VERSION = "1.10";
 
     enum UniquenessPolicy {
         // Specifies the framework will allow multiple bundles to be installed having the same symbolic name and version.
@@ -165,6 +171,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     private ServiceTarget serviceTarget;
     private int stoppedEvent;
     private final FrameworkExtensions frameworkExtensions = new FrameworkExtensions(this);
+    private BundleActivator connectActivator;
 
     @SuppressWarnings("deprecation")
     BundleManagerPlugin(ServiceContainer serviceContainer, FrameworkBuilder frameworkBuilder) {
@@ -370,6 +377,13 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (value == null)
             value = SecurityActions.getSystemProperty(key, null);
         return value;
+    }
+
+    /**
+     * Get a property of the framework configuration, without the fallback to the system properties.
+     */
+    Object getConfiguredProperty(String key) {
+        return properties.get(key);
     }
 
     @Override
@@ -837,6 +851,67 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             throw MESSAGES.illegalStateFrameworkAlreadyStopped();
     }
 
+    ModuleConnector getModuleConnector() {
+        return frameworkBuilder.getModuleConnector();
+    }
+
+    /**
+     * Ask the module connector of a connect framework for the content of the bundle at the given location.
+     *
+     * @return null if this is not a connect framework, or when the location is not for a connect bundle
+     */
+    VirtualFile connect(String location) throws BundleException {
+        ModuleConnector connector = getModuleConnector();
+        if (connector == null)
+            return null;
+
+        Optional<ConnectModule> module;
+        try {
+            module = connector.connect(location);
+        } catch (BundleException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw MESSAGES.cannotConnectBundle(ex, location);
+        }
+        if (module == null || module.isPresent() == false)
+            return null;
+
+        try {
+            return ConnectVirtualFile.create(location, module.get());
+        } catch (IOException ex) {
+            throw MESSAGES.cannotConnectBundle(ex, location);
+        }
+    }
+
+    /** Start the activator of the module connector. This is done whenever the framework is initialized. */
+    void startConnectActivator() throws BundleException {
+        ModuleConnector connector = getModuleConnector();
+        if (connector == null)
+            return;
+
+        try {
+            Optional<BundleActivator> activator = connector.newBundleActivator();
+            if (activator != null && activator.isPresent()) {
+                activator.get().start(getSystemBundle().getBundleContext());
+                connectActivator = activator.get();
+            }
+        } catch (Exception ex) {
+            throw MESSAGES.cannotStartConnectActivator(ex);
+        }
+    }
+
+    private void stopConnectActivator() {
+        BundleActivator activator = connectActivator;
+        connectActivator = null;
+        if (activator != null) {
+            try {
+                activator.stop(getSystemBundle().getBundleContext());
+            } catch (Throwable th) {
+                getFrameworkState().getFrameworkEvents().fireFrameworkEvent(getSystemBundle(), FrameworkEvent.ERROR, th);
+            }
+        }
+    }
+
     FrameworkExtensions getFrameworkExtensions() {
         return frameworkExtensions;
     }
@@ -886,6 +961,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
         // Stop the extension bundle activators before event handling is disabled
         frameworkExtensions.stopActivators();
+        stopConnectActivator();
 
         // Shutdown all executor services
         synchronized (executorServices) {

@@ -51,13 +51,22 @@ final class RevisionContentResourceLoader implements IterableResourceLoader {
     private final HostBundleRevision hostRev;
     private final RevisionContent revContent;
     private final IterableResourceLoader delegate;
+    private final boolean listOnly;
 
     RevisionContentResourceLoader(HostBundleRevision hostRev, RevisionContent revContent) {
+        this(hostRev, revContent, false);
+    }
+
+    /**
+     * @param listOnly True if the content is only iterated. The classes and resources then come from another loader
+     */
+    RevisionContentResourceLoader(HostBundleRevision hostRev, RevisionContent revContent, boolean listOnly) {
         assert hostRev != null : "Null hostRev";
         assert revContent != null : "Null revContent";
-        this.delegate = new VirtualFileResourceLoader(revContent.getVirtualFile(), revContent.getVersionedRoots(), revContent.isMultiRelease());
+        this.delegate = new VirtualFileResourceLoader(revContent.getVirtualFile(), revContent.getVersionedRoots(), revContent.isMultiRelease(), ConnectVirtualFile.isConnectFile(revContent.getVirtualFile()));
         this.revContent = revContent;
         this.hostRev = hostRev;
+        this.listOnly = listOnly;
     }
 
     @Override
@@ -67,17 +76,17 @@ final class RevisionContentResourceLoader implements IterableResourceLoader {
 
     @Override
     public ClassSpec getClassSpec(String fileName) throws IOException {
-        return delegate.getClassSpec(fileName);
+        return listOnly ? null : delegate.getClassSpec(fileName);
     }
 
     @Override
     public PackageSpec getPackageSpec(String name) throws IOException {
-        return delegate.getPackageSpec(name);
+        return listOnly ? null : delegate.getPackageSpec(name);
     }
 
     @Override
     public Resource getResource(String path) {
-        URL url = revContent.getResource(path);
+        URL url = listOnly ? null : revContent.getResource(path);
         return url != null ? new URLResource(url) : null;
     }
 

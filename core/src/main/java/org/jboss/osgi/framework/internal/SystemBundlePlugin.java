@@ -137,6 +137,11 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
             builder.addExportPackages(packageSpec);
         }
 
+        // The services of the Log Service that the system bundle registers
+        builder.addProvidedCapabilities("osgi.service;objectClass:List<String>=\"org.osgi.service.log.LogService,org.osgi.service.log.LoggerFactory\";uses:=\"org.osgi.service.log\"");
+        builder.addProvidedCapabilities("osgi.service;objectClass:List<String>=\"org.osgi.service.log.LogReaderService\";uses:=\"org.osgi.service.log\"");
+        builder.addProvidedCapabilities("osgi.service;objectClass:List<String>=\"org.osgi.service.log.admin.LoggerAdmin\";uses:=\"org.osgi.service.log.admin\"");
+
         // Add framework system capabilities
         String syscaps = (String) bundleManager.getProperty(Constants.FRAMEWORK_EXECUTIONENVIRONMENT);
         if (syscaps != null) {

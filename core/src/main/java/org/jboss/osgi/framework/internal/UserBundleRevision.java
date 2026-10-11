@@ -123,6 +123,12 @@ abstract class UserBundleRevision extends BundleStateRevision {
 
     abstract void refreshRevision();
 
+    void closeConnectContent() {
+        VirtualFile rootFile = deployment.getRoot();
+        if (ConnectVirtualFile.isConnectFile(rootFile))
+            VFSUtils.safeClose(rootFile);
+    }
+
     @Override
     void close() {
         super.close();

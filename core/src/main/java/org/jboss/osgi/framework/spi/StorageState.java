@@ -55,6 +55,7 @@ public class StorageState {
     public static final String PROPERTY_ACTIVATION_POLICY_USED = "ActivationPolicyUsed";
     public static final String PROPERTY_START_LEVEL = "StartLevel";
     public static final String PROPERTY_JAVA_VERSION = "JavaVersion";
+    public static final String PROPERTY_CONNECT_BUNDLE = "ConnectBundle";
     public static final String BUNDLE_PERSISTENT_PROPERTIES = "bundle-persistent.properties";
     public static final String BUNDLE_DIRECTORY_PREFIX = "bundle-";
 
@@ -88,9 +89,18 @@ public class StorageState {
     }
 
     public static StorageState createStorageState(File storageDir, VirtualFile rootFile, Properties props) throws IOException {
+        return createStorageState(storageDir, rootFile, props, true);
+    }
+
+    /**
+     * Create the storage state of a bundle revision.
+     *
+     * @param copyContent false when the content of the root file must not be stored. It is then not restored either.
+     */
+    public static StorageState createStorageState(File storageDir, VirtualFile rootFile, Properties props, boolean copyContent) throws IOException {
         StorageState storageState = new StorageState(storageDir, rootFile, props);
         LOGGER.debugf("Created storage state: %s", storageState);
-        if (rootFile != null) {
+        if (rootFile != null && copyContent) {
             String bundleId = props.getProperty(StorageState.PROPERTY_BUNDLE_ID);
             String revision = props.getProperty(StorageState.PROPERTY_BUNDLE_REV);
             File revFile = new File(storageDir + File.separator + StorageState.BUNDLE_DIRECTORY_PREFIX + bundleId + "-rev-" + revision + ".jar");
@@ -164,6 +174,11 @@ public class StorageState {
 
     public int getRevisionId() {
         return revision;
+    }
+
+    /** True for a connect bundle, which gets its content from the module connector */
+    public boolean isConnectBundle() {
+        return Boolean.parseBoolean(props.getProperty(PROPERTY_CONNECT_BUNDLE));
     }
 
     public long getLastModified() {

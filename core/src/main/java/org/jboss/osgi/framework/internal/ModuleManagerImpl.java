@@ -22,11 +22,13 @@
 package org.jboss.osgi.framework.internal;
 
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
+import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 import static org.jboss.osgi.framework.internal.InternalConstants.NATIVE_LIBRARY_METADATA_KEY;
 import static org.osgi.framework.Constants.SYSTEM_BUNDLE_SYMBOLICNAME;
 import static org.osgi.framework.Constants.VISIBILITY_REEXPORT;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -37,6 +39,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.jboss.modules.DependencySpec;
+import org.jboss.modules.LocalDependencySpecBuilder;
 import org.jboss.modules.Module;
 import org.jboss.modules.ModuleClassLoader;
 import org.jboss.modules.ModuleIdentifier;
@@ -73,6 +76,7 @@ import org.jboss.osgi.resolver.XPackageRequirement;
 import org.jboss.osgi.resolver.XRequirement;
 import org.jboss.osgi.resolver.XResource;
 import org.jboss.osgi.vfs.VFSUtils;
+import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.BundleReference;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleRevision;
@@ -248,9 +252,22 @@ public final class ModuleManagerImpl implements ModuleManager {
         for (DependencySpec dep : moduleDependencies.values())
             specBuilder.addDependency(dep);
 
-        // Add resource roots the local bundle content
+        // The content of a connect bundle may come with the class loader that loads from it
+        ClassLoader connectLoader = null;
+        Set<String> connectPaths = null;
+        try {
+            VirtualFile rootFile = hostRev.getDeployment().getRoot();
+            if (ConnectVirtualFile.isConnectFile(rootFile)) {
+                connectLoader = ((ConnectVirtualFile) rootFile).getClassLoader();
+                connectPaths = ((ConnectVirtualFile) rootFile).getFilePaths();
+            }
+        } catch (IOException ex) {
+            throw MESSAGES.illegalStateCannotAccessConnectContent(ex, hostRev);
+        }
+
+        // Add resource roots the local bundle content. With a connect class loader the content is only listed
         for (RevisionContent revContent : contentRoots) {
-            ResourceLoader resLoader = new RevisionContentResourceLoader(hostRev, revContent);
+            ResourceLoader resLoader = new RevisionContentResourceLoader(hostRev, revContent, connectLoader != null);
             specBuilder.addResourceRoot(ResourceLoaderSpec.createResourceLoaderSpec(resLoader));
         }
 
@@ -297,13 +314,24 @@ public final class ModuleManagerImpl implements ModuleManager {
         DependencySpec localDep = DependencySpec.createLocalDependencySpec(importFilter, exportFilter, resImportFilter, resExportFilter, classImportFilter, classExportFilter);
         specBuilder.addDependency(localDep);
 
+        // The connect class loader provides the classes and resources of the paths that the bundle does not import
+        if (connectLoader != null) {
+            LocalDependencySpecBuilder connectDep = new LocalDependencySpecBuilder();
+            connectDep.setImportFilter(importFilter).setExportFilter(exportFilter);
+            connectDep.setResourceImportFilter(resImportFilter).setResourceExportFilter(resExportFilter);
+            connectDep.setClassImportFilter(classImportFilter).setClassExportFilter(classExportFilter);
+            connectDep.setLocalLoader(new ConnectLocalLoader(connectLoader)).setLoaderPaths(connectPaths);
+            specBuilder.addDependency(connectDep.build());
+        }
+
         // Native - Hack
         addNativeResourceLoader(hostRev, specBuilder);
 
         PathFilter lazyActivationFilter = getLazyPackagesFilter(hostBundle);
         specBuilder.setModuleClassLoaderFactory(new HostBundleClassLoader.Factory(hostBundle, lazyActivationFilter));
         specBuilder.setClassFileTransformer(new WeavingHookProcessor(hostRev, frameworkEvents));
-        specBuilder.setFallbackLoader(new FallbackLoader(hostRev, importedPaths));
+        FallbackLoader fallbackLoader = new FallbackLoader(hostRev, importedPaths);
+        specBuilder.setFallbackLoader(connectLoader != null ? new ConnectLocalLoader(connectLoader).after(fallbackLoader) : fallbackLoader);
 
         ModuleSpecBuilderContext context = new ModuleSpecBuilderContext() {
 

@@ -22,6 +22,7 @@
 package org.jboss.osgi.framework.spi;
 
 import java.util.HashSet;
+import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.ServiceLoader;
 import java.util.Set;
@@ -33,11 +34,13 @@ import org.jboss.msc.service.StartException;
 import org.jboss.msc.service.StopContext;
 import org.jboss.msc.value.InjectedValue;
 import org.jboss.osgi.framework.Services;
+import org.jboss.osgi.framework.internal.log.LogServices;
 import org.jboss.osgi.resolver.XEnvironment;
 import org.jboss.osgi.resolver.XResolver;
 import org.jboss.osgi.resolver.spi.AbstractResolver;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;
+import org.osgi.service.condition.Condition;
 import org.osgi.service.resolver.Resolver;
 
 /**
@@ -52,6 +55,7 @@ public class SystemServicesPlugin extends AbstractIntegrationService<SystemServi
     private final InjectedValue<XEnvironment> injectedEnvironment = new InjectedValue<XEnvironment>();
     private final InjectedValue<XResolver> injectedResolver = new InjectedValue<XResolver>();
     private final Set<ServiceRegistration<?>> registrations = new HashSet<ServiceRegistration<?>>();
+    private LogServices logServices;
 
     public SystemServicesPlugin() {
         super(IntegrationServices.SYSTEM_SERVICES_PLUGIN);
@@ -94,10 +98,23 @@ public class SystemServicesPlugin extends AbstractIntegrationService<SystemServi
             if (resolvers.hasNext()) {
                 registrations.add(context.registerService(Resolver.class, resolvers.next(), null));
             }
+
+            // The true condition is always available
+            Hashtable<String, Object> props = new Hashtable<String, Object>();
+            props.put(Condition.CONDITION_ID, Condition.CONDITION_ID_TRUE);
+            registrations.add(context.registerService(Condition.class, Condition.INSTANCE, props));
+
+            // The Log Service
+            logServices = new LogServices(context);
+            logServices.start();
         }
 
         @Override
         public void unregisterServices() {
+            if (logServices != null) {
+                logServices.stop();
+                logServices = null;
+            }
             for (ServiceRegistration<?> sreg : registrations) {
                 sreg.unregister();
             }

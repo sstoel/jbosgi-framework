@@ -287,6 +287,10 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
             // Make the {@link BundleWiring} for the old {@link BundleRevision} uneffective
             currentRev.getWiringSupport().makeUneffective();
+
+            // The connect content of a revision that is not in use is closed right away
+            if (currentRev.getWiringSupport().getWiring(false) == null)
+                currentRev.closeConnectContent();
         } catch (Exception ex) {
             boolean isbe = (ex instanceof BundleException);
             BundleException be = isbe ? (BundleException) ex : MESSAGES.cannotUpdateBundle(ex, this);
@@ -329,7 +333,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         // this bundle's Bundle-UpdateLocation Manifest header, if present, or this bundle's
         // original location.
         VirtualFile rootFile = null;
-        if (input == null) {
+
+        // Without an input stream the module connector of a connect framework decides whether the update is a connect bundle
+        if (input == null)
+            rootFile = getBundleManager().connect(getLocation());
+
+        if (rootFile == null && input == null) {
             if (updateLocation != null) {
                 URL updateURL = new URL(updateLocation);
                 rootFile = AbstractVFS.toVirtualFile(updateURL);

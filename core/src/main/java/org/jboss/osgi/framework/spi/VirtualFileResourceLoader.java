@@ -66,6 +66,7 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
     private final VirtualFile virtualFile;
     private final List<VirtualFile> versionedRoots;
     private final boolean multiRelease;
+    private final boolean directoryResources;
     private final Set<String> localPaths;
 
     public VirtualFileResourceLoader(VirtualFile virtualFile) {
@@ -80,6 +81,19 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
      * @param multiRelease True if the versioned directories of the container are not part of its content
      */
     public VirtualFileResourceLoader(VirtualFile virtualFile, List<VirtualFile> versionedRoots, boolean multiRelease) {
+        this(virtualFile, versionedRoots, multiRelease, false);
+    }
+
+    /**
+     * Create a resource loader for a multi-release container.
+     *
+     * @param virtualFile The root of the container
+     * @param versionedRoots The versioned directories that apply to the running Java platform, highest version first
+     * @param multiRelease True if the versioned directories of the container are not part of its content
+     * @param directoryResources True if the directories of the container are iterated as resources, with a name that ends with a slash.
+     *        The container may then also be empty
+     */
+    public VirtualFileResourceLoader(VirtualFile virtualFile, List<VirtualFile> versionedRoots, boolean multiRelease, boolean directoryResources) {
         if (virtualFile == null)
             throw MESSAGES.illegalArgumentNull("virtualFile");
         if (versionedRoots == null)
@@ -87,6 +101,7 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
         this.virtualFile = virtualFile;
         this.versionedRoots = versionedRoots;
         this.multiRelease = multiRelease;
+        this.directoryResources = directoryResources;
         this.localPaths = getLocalPaths();
     }
 
@@ -223,6 +238,10 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
                         continue;
                     if (result.containsKey(name) == false)
                         result.put(name, new VirtualFileResource(entry, name));
+                } else if (directoryResources) {
+                    String name = getRelativePath(root, entry) + "/";
+                    if (versioned == false && isHiddenPath(name) == false && result.containsKey(name) == false)
+                        result.put(name, new VirtualFileResource(entry, name));
                 }
             } catch (IOException ex) {
                 throw MESSAGES.illegalArgumentCannotObtainPaths(ex, virtualFile);
@@ -245,7 +264,7 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
         } catch (IOException ex) {
             throw MESSAGES.illegalArgumentCannotObtainPaths(ex, virtualFile);
         }
-        if (result.size() == 0)
+        if (result.size() == 0 && directoryResources == false)
             throw MESSAGES.illegalArgumentCannotObtainPaths(null, virtualFile);
 
         return Collections.unmodifiableSet(result);
@@ -261,6 +280,13 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
 
                 int inx = entryPath.lastIndexOf("/");
                 result.add(inx > 0 ? entryPath.substring(0, inx) : "");
+            } else if (directoryResources && versioned == false) {
+                // The directory is a path, so that the directories it contains are iterated
+                String entryPath = getRelativePath(root, descendant);
+                if (isHiddenPath(entryPath + "/") == false) {
+                    result.add(entryPath);
+                    result.add("");
+                }
             }
         }
     }
