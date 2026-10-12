@@ -138,6 +138,10 @@ public class CoreR7TestCase extends OSGiFrameworkTest {
         assertTrue(resolvesWithExecutionEnvironment("ee-eight", "(&(osgi.ee=JavaSE)(version=1.8))"));
         assertFalse(resolvesWithExecutionEnvironment("ee-only-one-three", "(&(osgi.ee=JavaSE)(version>=1.3)(!(version>=1.4)))"));
         assertFalse(resolvesWithExecutionEnvironment("ee-future", "(&(osgi.ee=JavaSE)(version>=9999))"));
+
+        // An execution environment with one version has a version too, not a string
+        assertTrue(resolvesWithExecutionEnvironment("ee-compact", "(&(osgi.ee=JavaSE/compact1)(version>=1.8.0))"));
+        assertFalse(resolvesWithExecutionEnvironment("ee-compact-future", "(&(osgi.ee=JavaSE/compact1)(version>=1.10.0))"));
     }
 
     @Test

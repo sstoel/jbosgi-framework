@@ -315,6 +315,8 @@ public final class ServiceManagerImpl implements ServiceManager {
                 ((ServiceStateImpl<?>) serviceState).releasePrototypeValues(bundle);
                 serviceState.removeUsingBundle(bundle);
             }
+            // A bundle may have got a prototype service object in the meantime
+            ((ServiceStateImpl<?>) serviceState).releaseAllPrototypeValues();
 
             // Remove from owner bundle
             BundleServices.get(serviceOwner).removeRegisteredService(serviceState);

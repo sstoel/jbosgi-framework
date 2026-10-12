@@ -77,6 +77,42 @@ public class CoreR8TestCase extends OSGiFrameworkTest {
     }
 
     @Test
+    public void testCapabilityProvidedAndRequired() throws Exception {
+        // A bundle that provides a capability in a namespace and requires another one in that namespace
+        // keeps its own capability, only an exported package is substituted by an import
+        Bundle provider = installBundle(getCapabilityArchive("cap-provider", "test.ns;foo=bar", null));
+        Bundle both = installBundle(getCapabilityArchive("cap-both", "test.ns;foo=baz", "test.ns;filter:=\"(foo=bar)\""));
+        try {
+            both.start();
+            BundleWiring wiring = both.adapt(BundleWiring.class);
+            assertEquals(1, wiring.getRequiredWires("test.ns").size());
+            assertSame(provider, wiring.getRequiredWires("test.ns").get(0).getProvider().getBundle());
+
+            assertEquals(1, wiring.getCapabilities("test.ns").size());
+            assertEquals("baz", wiring.getCapabilities("test.ns").get(0).getAttributes().get("foo"));
+        } finally {
+            both.uninstall();
+            provider.uninstall();
+        }
+    }
+
+    private JavaArchive getCapabilityArchive(String name, final String provided, final String required) {
+        final JavaArchive archive = ShrinkWrap.create(JavaArchive.class, name);
+        archive.setManifest(new Asset() {
+            public InputStream openStream() {
+                OSGiManifestBuilder builder = OSGiManifestBuilder.newInstance();
+                builder.addBundleManifestVersion(2);
+                builder.addBundleSymbolicName(archive.getName());
+                builder.addManifestHeader(Constants.PROVIDE_CAPABILITY, provided);
+                if (required != null)
+                    builder.addManifestHeader(Constants.REQUIRE_CAPABILITY, required);
+                return builder.openStream();
+            }
+        });
+        return archive;
+    }
+
+    @Test
     public void testFrameworkVersion() throws Exception {
         BundleContext context = getSystemContext();
         assertEquals("1.10", context.getProperty(Constants.FRAMEWORK_VERSION));
