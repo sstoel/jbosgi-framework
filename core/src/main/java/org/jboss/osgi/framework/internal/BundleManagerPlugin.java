@@ -130,7 +130,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     private static String OSGi_FRAMEWORK_PROCESSOR;
     // The framework vendor
     private static String OSGi_FRAMEWORK_VENDOR = "jboss.org";
-    // The framework version. This is the version of the org.osgi.framework package in R6
+    // The framework version. This is the version of the org.osgi.framework package in R8
     private static String OSGi_FRAMEWORK_VERSION = "1.10";
 
     enum UniquenessPolicy {

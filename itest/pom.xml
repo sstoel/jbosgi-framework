@@ -134,7 +134,6 @@
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
-            <version>4.13.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -236,30 +235,6 @@
     </build>
 
     <profiles>
-        <!--
-          Name: equinox
-          Descr: Setup for Equinox framework integration testing
-        -->
-        <profile>
-            <id>equinox</id>
-            <activation>
-                <property>
-                    <name>framework</name>
-                    <value>equinox</value>
-                </property>
-            </activation>
-            <properties>
-                <jboss.osgi.framework.properties>jboss-osgi-equinox.properties</jboss.osgi.framework.properties>
-            </properties>
-            <dependencies>
-                <dependency>
-                    <groupId>org.jboss.osgi.equinox</groupId>
-                    <artifactId>jboss-osgi-equinox</artifactId>
-                    <scope>provided</scope>
-                </dependency>
-            </dependencies>
-        </profile>
-
         <!--
           Name: jboss
           Descr: Setup for MSC Framework integration testing

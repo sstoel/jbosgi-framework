@@ -152,7 +152,6 @@
                                         <artifactId>maven-assembly-plugin</artifactId>
                                         <versionRange> [2.2.2,)</versionRange>
                                         <goals>
-                                            <goal> directory-single</goal>
                                             <goal>single</goal>
                                         </goals>
                                     </pluginExecutionFilter>
@@ -203,7 +202,6 @@
                     <plugin>
                         <artifactId>maven-compiler-plugin</artifactId>
                         <configuration>
-                            <!-- Eclipse R5 TCK does not run when this is 1.7 -->
                             <source>21</source>
                             <target>21</target>
                         </configuration>
