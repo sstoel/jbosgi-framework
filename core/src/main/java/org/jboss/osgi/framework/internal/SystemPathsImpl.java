@@ -114,12 +114,24 @@ public final class SystemPathsImpl implements SystemPaths {
      */
     static Set<String> getRuntimeJavaPackages() {
         Set<String> result = new TreeSet<String>();
+        for (String packageName : getRuntimePackages()) {
+            if (packageName.startsWith("java."))
+                result.add(packageName);
+        }
+        return result;
+    }
+
+    /**
+     * The packages that the running Java platform exports to all modules.
+     */
+    private static Set<String> getRuntimePackages() {
+        Set<String> result = new HashSet<String>();
         for (Module module : ModuleLayer.boot().modules()) {
             ModuleDescriptor descriptor = module.getDescriptor();
             if (descriptor == null)
                 continue;
             for (ModuleDescriptor.Exports exports : descriptor.exports()) {
-                if (!exports.isQualified() && exports.source().startsWith("java."))
+                if (!exports.isQualified())
                     result.add(exports.source());
             }
         }
@@ -130,10 +142,13 @@ public final class SystemPathsImpl implements SystemPaths {
      * The system packages that are used when {@link org.osgi.framework.Constants#FRAMEWORK_SYSTEMPACKAGES} is not configured.
      */
     static Set<String> getDefaultSystemPackages() {
+        Set<String> runtimePackages = getRuntimePackages();
         Set<String> result = new LinkedHashSet<String>(getRuntimeJavaPackages());
         for (String packageSpec : SystemPaths.DEFAULT_SYSTEM_PACKAGES) {
-            // The java.* packages are taken from the running Java platform
-            if (!packageSpec.startsWith("java."))
+            // The java.* packages are taken from the running Java platform.
+            // The other packages are only exported when the running Java platform has them,
+            // a package that comes from the class path instead is configured as an extra system package.
+            if (!packageSpec.startsWith("java.") && runtimePackages.contains(packageName(packageSpec)))
                 result.add(packageSpec);
         }
         result.addAll(Arrays.asList(SystemPaths.DEFAULT_FRAMEWORK_PACKAGES));

@@ -24,10 +24,10 @@ package org.jboss.test.osgi.msc;
 
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.jboss.msc.service.LifecycleEvent;
 import org.jboss.msc.service.LifecycleListener;
@@ -36,9 +36,11 @@ import org.junit.Assert;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceController.Mode;
+import org.jboss.msc.service.ServiceController.State;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
+import org.jboss.osgi.framework.spi.FutureServiceValue;
 import org.jboss.osgi.framework.spi.ServiceTracker;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -52,16 +54,21 @@ import org.junit.Test;
 public class ServiceTrackerTestCase extends AbstractServiceTestCase {
 
     @Test
-    public void testImmediateCallToListenerAdded() throws Exception {
+    public void testListenerCalledOnInstall() throws Exception {
 
-        final AtomicBoolean listenerAdded = new AtomicBoolean();
-        LifecycleListener listener = (controller, event) -> {};
+        // The tracker relies on the event that a listener gets when the service is installed
+        final CountDownLatch installed = new CountDownLatch(1);
+        final AtomicReference<LifecycleEvent> firstEvent = new AtomicReference<LifecycleEvent>();
+        LifecycleListener listener = (controller, event) -> {
+            firstEvent.compareAndSet(null, event);
+            installed.countDown();
+        };
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
         builder.addListener(listener);
-        listenerAdded.set(true);
         builder.install();
 
-        Assert.assertTrue("Listener added", listenerAdded.get());
+        Assert.assertTrue("Listener called", installed.await(500, TimeUnit.MILLISECONDS));
+        Assert.assertEquals(LifecycleEvent.DOWN, firstEvent.get());
     }
 
     @Test
@@ -164,9 +171,56 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
         ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
         builder.addListener(tracker);
         ServiceController<String> controller = builder.install();
-        tracker.handleEvent(controller, LifecycleEvent.DOWN);
+
+        boolean outcome = tracker.awaitCompletion(500, TimeUnit.MILLISECONDS);
+        Assert.assertTrue("All complete", outcome);
+
+        // A service that goes down after it was up does not change the outcome
+        controller.setMode(Mode.NEVER);
+        new FutureServiceValue<String>(controller, State.DOWN).get(500, TimeUnit.MILLISECONDS);
+
+        Assert.assertTrue("Complete", tracker.isComplete());
+        Assert.assertEquals(1, tracker.getStartedServices().size());
+        Assert.assertFalse("No failed services", tracker.hasFailedServices());
+    }
+
+    @Test
+    public void testRemoveBeforeStart() throws Exception {
+
+        // The service cannot start, its dependency is missing
+        ServiceTracker tracker = new ServiceTracker();
+        ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
+        builder.requires(ServiceName.of("serviceB"));
+        builder.addListener(tracker);
+        ServiceController<String> controller = builder.install();
+
+        try {
+            tracker.awaitCompletion(200, TimeUnit.MILLISECONDS);
+            Assert.fail("TimeoutException expected");
+        } catch (TimeoutException ex) {
+            // expected
+        }
+        Assert.assertFalse("Not complete", tracker.isComplete());
+
+        controller.setMode(Mode.REMOVE);
+
+        boolean outcome = tracker.awaitCompletion(500, TimeUnit.MILLISECONDS);
+        Assert.assertTrue("All complete", outcome);
+        Assert.assertTrue("No started services", tracker.getStartedServices().isEmpty());
+    }
+
+    @Test
+    public void testUntrackBeforeStart() throws Exception {
+
+        // The tracker is not notified of a start that is cancelled, the service is taken out explicitly
+        ServiceTracker tracker = new ServiceTracker();
+        ServiceBuilder<String> builder = serviceTarget.addService(ServiceName.of("serviceA"), new ServiceA());
+        builder.requires(ServiceName.of("serviceB"));
+        builder.addListener(tracker);
+        ServiceController<String> controller = builder.install();
 
         controller.setMode(Mode.NEVER);
+        tracker.untrackService(controller);
 
         boolean outcome = tracker.awaitCompletion(500, TimeUnit.MILLISECONDS);
         Assert.assertTrue("All complete", outcome);

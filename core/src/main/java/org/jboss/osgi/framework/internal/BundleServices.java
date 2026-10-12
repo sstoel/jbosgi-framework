@@ -102,27 +102,25 @@ public final class BundleServices {
     }
 
     void addServiceInUse(ServiceState<?> serviceState) {
-        AtomicInteger count = usedServices.computeIfAbsent(serviceState, (k) -> new AtomicInteger());
-        synchronized (count) {
+        // The count is changed within the map operation, a concurrent remove cannot drop the entry in between
+        usedServices.compute(serviceState, (k, count) -> {
+            if (count == null)
+                count = new AtomicInteger();
             count.incrementAndGet();
-        }
+            return count;
+        });
     }
 
     /**
      * @return The remaining use count, -1 if the service is not in use
      */
     int removeServiceInUse(ServiceState<?> serviceState) {
-        AtomicInteger count = usedServices.get(serviceState);
-        if (count == null)
-            return -1;
-
-        synchronized (count) {
-            int countVal = count.decrementAndGet();
-            if (countVal == 0)
-                usedServices.remove(serviceState);
-
-            return countVal;
-        }
+        int[] result = new int[] { -1 };
+        usedServices.computeIfPresent(serviceState, (k, count) -> {
+            result[0] = count.decrementAndGet();
+            return result[0] > 0 ? count : null;
+        });
+        return result[0];
     }
 
     /**

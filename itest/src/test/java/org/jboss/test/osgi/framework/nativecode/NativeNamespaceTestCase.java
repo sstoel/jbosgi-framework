@@ -50,6 +50,7 @@ import org.osgi.framework.wiring.BundleRequirement;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
+import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.resource.Namespace;
 
 /**
@@ -120,6 +121,23 @@ public class NativeNamespaceTestCase extends OSGiFrameworkTest {
             bundle.start();
             assertBundleState(Bundle.ACTIVE, bundle.getState());
             assertTrue(bundle.adapt(BundleWiring.class).getRequiredWires(NativeNamespace.NATIVE_NAMESPACE).isEmpty());
+        } finally {
+            bundle.uninstall();
+        }
+    }
+
+    @Test
+    public void testClauseWithoutSelection() throws Exception {
+        // The second clause has no selection attributes, it matches every environment
+        Bundle bundle = installBundle(getNativeCodeArchive("native-unconditional", "lib/a.so; osname=NoSuchOS; processor=x86, lib/b.so"));
+        try {
+            List<BundleRequirement> reqs = bundle.adapt(BundleRevision.class).getDeclaredRequirements(NativeNamespace.NATIVE_NAMESPACE);
+            assertEquals(1, reqs.size());
+            assertNull("No filter", reqs.get(0).getDirectives().get(Namespace.REQUIREMENT_FILTER_DIRECTIVE));
+            assertNull("Mandatory", reqs.get(0).getDirectives().get(Namespace.REQUIREMENT_RESOLUTION_DIRECTIVE));
+
+            Collection<BundleCapability> providers = getSystemContext().getBundle().adapt(FrameworkWiring.class).findProviders(reqs.get(0));
+            assertEquals("The system bundle provides it", 1, providers.size());
         } finally {
             bundle.uninstall();
         }

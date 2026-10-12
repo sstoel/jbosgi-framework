@@ -31,6 +31,8 @@ import static org.junit.Assert.assertTrue;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.jboss.osgi.metadata.OSGiManifestBuilder;
 import org.jboss.osgi.testing.OSGiFrameworkTest;
@@ -57,6 +59,22 @@ import org.osgi.service.condition.Condition;
  * @since 11-Oct-2026
  */
 public class CoreR8TestCase extends OSGiFrameworkTest {
+
+    @Test
+    public void testDefaultSystemPackages() throws Exception {
+        // The system bundle only exports what the running Java platform and the framework provide
+        BundleRevision sysrev = getSystemContext().getBundle(0).adapt(BundleRevision.class);
+        Set<String> packages = new HashSet<String>();
+        for (BundleCapability cap : sysrev.getDeclaredCapabilities(PackageNamespace.PACKAGE_NAMESPACE))
+            packages.add((String) cap.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+
+        for (String name : new String[] { "java.lang", "javax.transaction.xa", "javax.xml.parsers", "org.w3c.dom", "org.osgi.framework", "org.osgi.util.xml" })
+            assertTrue("Exported: " + name, packages.contains(name));
+        for (String name : new String[] { "jakarta.xml.bind", "jakarta.xml.ws", "javax.transaction", "javax.rmi", "org.jcp.xml.dsig.internal", "org.osgi.util.promise" })
+            assertFalse("Not exported: " + name, packages.contains(name));
+
+        assertEquals("1.1.1", getPackageVersion(sysrev, "org.osgi.dto"));
+    }
 
     @Test
     public void testFrameworkVersion() throws Exception {

@@ -61,7 +61,7 @@ public class CoreR7TestCase extends OSGiFrameworkTest {
 
         // The versions of the packages that changed in R7 and did not change again in R8
         BundleRevision sysrev = context.getBundle(0).adapt(BundleRevision.class);
-        assertEquals("1.1.0", getPackageVersion(sysrev, "org.osgi.dto"));
+        assertEquals("1.1.1", getPackageVersion(sysrev, "org.osgi.dto"));
         assertEquals("1.3.0", getPackageVersion(sysrev, "org.osgi.framework.wiring.dto"));
     }
 

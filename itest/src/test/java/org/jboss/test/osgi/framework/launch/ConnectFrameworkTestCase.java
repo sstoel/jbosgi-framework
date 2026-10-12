@@ -237,6 +237,27 @@ public class ConnectFrameworkTestCase extends AbstractFrameworkLaunchTest {
     }
 
     @Test
+    public void testContentWithoutDirectoryEntries() throws Exception {
+        newConnectFramework(true);
+        framework.start();
+        BundleContext context = framework.getBundleContext();
+
+        // The content only lists its files, like most jars do
+        connector.contents.get("connect:a").directoryEntries = false;
+        Bundle bundle = context.installBundle("connect:a");
+
+        assertEquals(Collections.singletonList("org/"), Collections.list(bundle.getEntryPaths("/")));
+        assertEquals(Collections.singletonList("org/jboss/"), Collections.list(bundle.getEntryPaths("org")));
+        assertEquals(Collections.singletonList(RESOURCE_PATH), Collections.list(bundle.getEntryPaths("org/jboss/test/connect")));
+
+        List<URL> entries = Collections.list(bundle.findEntries("/", "*", false));
+        assertEquals(1, entries.size());
+        assertEquals("/org/", entries.get(0).getPath());
+        assertEquals(5, Collections.list(bundle.findEntries("/", "*", true)).size());
+        assertNotNull("Directory entry found", bundle.getEntry("org/jboss"));
+    }
+
+    @Test
     public void testConnectClassLoader() throws Exception {
         newConnectFramework(true);
         framework.start();
@@ -331,6 +352,7 @@ public class ConnectFrameworkTestCase extends AbstractFrameworkLaunchTest {
         final Map<String, String> headers = new LinkedHashMap<String, String>();
         final ClassLoader classLoader;
         final byte[] bytes;
+        boolean directoryEntries = true;
         boolean open;
 
         TestContent(String symbolicName, ClassLoader classLoader) throws IOException {
@@ -355,10 +377,12 @@ public class ConnectFrameworkTestCase extends AbstractFrameworkLaunchTest {
         public Iterable<String> getEntries() {
             assertOpen();
             List<String> entries = new ArrayList<String>();
-            entries.add("org/");
-            entries.add("org/jboss/");
-            entries.add("org/jboss/test/");
-            entries.add("org/jboss/test/connect/");
+            if (directoryEntries) {
+                entries.add("org/");
+                entries.add("org/jboss/");
+                entries.add("org/jboss/test/");
+                entries.add("org/jboss/test/connect/");
+            }
             entries.add(RESOURCE_PATH);
             return entries;
         }

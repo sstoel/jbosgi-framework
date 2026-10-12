@@ -61,20 +61,27 @@ final class NativeNamespaceSupport {
             @Override
             public Object get(Object key) {
                 if (NativeNamespace.CAPABILITY_OSNAME_ATTRIBUTE.equals(key))
-                    return NativeCodeImpl.getOSNames((String) bundleManager.getProperty(Constants.FRAMEWORK_OS_NAME));
+                    return NativeCodeImpl.getOSNames(getStringProperty(Constants.FRAMEWORK_OS_NAME));
                 if (NativeNamespace.CAPABILITY_PROCESSOR_ATTRIBUTE.equals(key))
-                    return NativeCodeImpl.getProcessors((String) bundleManager.getProperty(Constants.FRAMEWORK_PROCESSOR));
+                    return NativeCodeImpl.getProcessors(getStringProperty(Constants.FRAMEWORK_PROCESSOR));
                 if (NativeNamespace.CAPABILITY_OSVERSION_ATTRIBUTE.equals(key)) {
+                    String osVersion = getStringProperty(Constants.FRAMEWORK_OS_VERSION);
                     try {
-                        return Version.parseVersion((String) bundleManager.getProperty(Constants.FRAMEWORK_OS_VERSION));
+                        return Version.parseVersion(osVersion);
                     } catch (RuntimeException ex) {
-                        return Version.emptyVersion;
+                        // A configured version like 5.15.0-91-generic, use the part of it that is a version
+                        return Version.parseVersion(BundleManagerPlugin.getOSVersionInOSGiFormat(osVersion));
                     }
                 }
                 if (NativeNamespace.CAPABILITY_LANGUAGE_ATTRIBUTE.equals(key))
                     return bundleManager.getProperty(Constants.FRAMEWORK_LANGUAGE);
 
                 return key instanceof String ? bundleManager.getProperty((String) key) : null;
+            }
+
+            private String getStringProperty(String key) {
+                Object value = bundleManager.getProperty(key);
+                return value != null ? value.toString() : null;
             }
 
             @Override
@@ -110,20 +117,25 @@ final class NativeNamespaceSupport {
     static Map<String, String> getRequirementDirectives(List<ParameterizedAttribute> params) {
         List<String> clauses = new ArrayList<String>();
         boolean optional = false;
+        boolean unconditional = false;
         for (ParameterizedAttribute param : params) {
             if ("*".equals(param.getAttribute())) {
                 optional = true;
                 continue;
             }
             String clause = getClauseFilter(param);
-            if (clause.length() > 0 && !clauses.contains(clause))
+            if (clause.length() == 0)
+                unconditional = true;
+            else if (!clauses.contains(clause))
                 clauses.add(clause);
         }
-        if (clauses.isEmpty())
+        if (clauses.isEmpty() && !unconditional)
             return null;
 
+        // A clause without selection attributes matches every environment, the requirement has no filter then
         Map<String, String> dirs = new HashMap<String, String>();
-        dirs.put(Namespace.REQUIREMENT_FILTER_DIRECTIVE, clauses.size() == 1 ? clauses.get(0) : "(|" + join(clauses) + ")");
+        if (!unconditional)
+            dirs.put(Namespace.REQUIREMENT_FILTER_DIRECTIVE, clauses.size() == 1 ? clauses.get(0) : "(|" + join(clauses) + ")");
         if (optional)
             dirs.put(Namespace.REQUIREMENT_RESOLUTION_DIRECTIVE, Namespace.RESOLUTION_OPTIONAL);
         return dirs;

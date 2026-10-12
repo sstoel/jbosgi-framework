@@ -1063,9 +1063,12 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     // OSGi frameworks seem to automatically fix this too. The original os version is still available
     // in the "os.version" system property.
     static String getOSVersionInOSGiFormat() {
+        return getOSVersionInOSGiFormat(SecurityActions.getSystemProperty("os.version", null));
+    }
+
+    static String getOSVersionInOSGiFormat(String sysVersion) {
         StringBuilder osgiVersion = new StringBuilder();
 
-        String sysVersion = SecurityActions.getSystemProperty("os.version", null);
         String[] elements = sysVersion.split("\\.");
         int i = 0;
         for (; i < 3 && i < elements.length; i++) {

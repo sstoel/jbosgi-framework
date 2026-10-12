@@ -29,6 +29,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.InputStream;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jboss.osgi.metadata.OSGiManifestBuilder;
 import org.jboss.osgi.testing.OSGiFrameworkTest;
@@ -124,6 +125,40 @@ public class ServiceFactoryTestCase extends OSGiFrameworkTest {
             sreg.unregister();
             actual = context.getService(sref);
             assertNull("Service null", actual);
+        } finally {
+            bundle.uninstall();
+        }
+    }
+
+    @Test
+    public void testConcurrentUseCount() throws Exception {
+        Bundle bundle = installBundle(getBundleArchiveA());
+        try {
+            bundle.start();
+            final BundleContext context = bundle.getBundleContext();
+            ServiceRegistration sreg = context.registerService(OBJCLASS, context, null);
+            final ServiceReference sref = sreg.getReference();
+
+            // Every thread releases the service that it got, the use count must not get lost in between
+            final AtomicInteger failures = new AtomicInteger();
+            Thread[] threads = new Thread[4];
+            for (int i = 0; i < threads.length; i++) {
+                threads[i] = new Thread(new Runnable() {
+                    public void run() {
+                        for (int j = 0; j < 20000; j++) {
+                            if (context.getService(sref) == null || !context.ungetService(sref))
+                                failures.incrementAndGet();
+                        }
+                    }
+                });
+                threads[i].start();
+            }
+            for (Thread thread : threads)
+                thread.join();
+
+            assertEquals("Every use was counted", 0, failures.get());
+            assertNull("No services in use", bundle.getServicesInUse());
+            assertFalse("Not in use anymore", context.ungetService(sref));
         } finally {
             bundle.uninstall();
         }

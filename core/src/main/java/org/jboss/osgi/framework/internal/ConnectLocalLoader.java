@@ -47,11 +47,10 @@ final class ConnectLocalLoader implements LocalLoader {
 
     @Override
     public Class<?> loadClassLocal(String name, boolean resolve) {
+        // The class is not initialized here, a class that cannot be linked is reported and not taken for a missing class
         try {
-            return Class.forName(name, resolve, classLoader);
+            return Class.forName(name, false, classLoader);
         } catch (ClassNotFoundException ex) {
-            return null;
-        } catch (LinkageError ex) {
             return null;
         }
     }

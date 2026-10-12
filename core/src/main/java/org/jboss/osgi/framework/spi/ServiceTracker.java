@@ -45,6 +45,10 @@ import org.jboss.msc.service.StartException;
 /**
  * Track a number of services and call complete when they are done.
  *
+ * A service is done when it is up, when it failed to start or when it is removed. The {@link LifecycleListener}
+ * is not notified of a start that is cancelled, a service that goes back to down before it started and that is
+ * not removed stays tracked. Use {@link #untrackService(ServiceController)} for such a service.
+ *
  * @author Thomas.Diesler@jboss.com
  * @since 19-Apr-2012
  */
@@ -75,30 +79,6 @@ public class ServiceTracker implements LifecycleListener {
     public String getTrackerName() {
         return trackerName;
     }
-//
-//    @Override
-//    public void listenerAdded(ServiceController<?> controller) {
-//        synchronized (trackedControllers) {
-//            if (trackService(controller)) {
-//                serviceListerAddedInternal(controller);
-//                State state = controller.getState();
-//                switch (state) {
-//                    case UP:
-//                        started.add(controller);
-//                        serviceStarted(controller);
-//                        break;
-//                    case START_FAILED:
-//                        failed.add(controller);
-//                        serviceStartFailed(controller);
-//                        break;
-//                    default:
-//                        trackedControllers.add(controller);
-//                }
-//            } else {
-//                controller.removeListener(this);
-//            }
-//        }
-//    }
 
     @Override
     public void handleEvent(final ServiceController<?> controller, final LifecycleEvent event) {

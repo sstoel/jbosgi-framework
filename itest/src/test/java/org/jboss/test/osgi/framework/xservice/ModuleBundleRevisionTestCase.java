@@ -23,6 +23,7 @@ package org.jboss.test.osgi.framework.xservice;
 
 import java.io.File;
 import java.net.URL;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 
@@ -148,7 +149,11 @@ public class ModuleBundleRevisionTestCase extends AbstractModuleIntegrationTest 
             Assert.assertNotNull(urls.nextElement());
         }
         Assert.assertNotNull(brev.getEntry(resname));
-        Assert.assertNotNull(brev.getEntryPaths(resname));
+        // The entries directly below a path, a sub directory has a trailing slash
+        Assert.assertTrue(Collections.list(brev.getEntryPaths(resOneAwayPath)).contains(resname));
+        Assert.assertTrue(Collections.list(brev.getEntryPaths(resTwoAwayPath)).contains(resOneAwayPath + "/"));
+        Assert.assertNull(brev.getEntryPaths(resname));
+        Assert.assertNull(brev.getEntryPaths("does/not/exist"));
     }
 
     private JavaArchive getModuleA() {

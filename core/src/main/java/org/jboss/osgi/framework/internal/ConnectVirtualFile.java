@@ -344,8 +344,15 @@ final class ConnectVirtualFile implements VirtualFile {
                     for (String name : entries) {
                         boolean isdir = name.endsWith("/");
                         String entryPath = normalize(isdir ? name.substring(0, name.length() - 1) : name);
-                        if (entryPath.length() > 0)
+                        if (entryPath.length() > 0) {
+                            // The directories that the content has no entry for are listed as well
+                            for (int index = entryPath.indexOf('/'); index > 0; index = entryPath.indexOf('/', index + 1)) {
+                                String parentPath = entryPath.substring(0, index);
+                                if (!result.containsKey(parentPath))
+                                    result.put(parentPath, new ConnectVirtualFile(this, parentPath, true));
+                            }
                             result.put(entryPath, new ConnectVirtualFile(this, entryPath, isdir));
+                        }
                     }
                 }
                 files = result;

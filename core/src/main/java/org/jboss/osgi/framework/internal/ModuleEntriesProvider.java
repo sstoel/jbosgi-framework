@@ -27,7 +27,9 @@ import java.io.File;
 import java.net.URL;
 import java.util.Enumeration;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.Vector;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -52,13 +54,28 @@ public final class ModuleEntriesProvider implements EntriesProvider {
 
     @Override
     public Enumeration<String> getEntryPaths(String path) {
-        Iterator<Resource> urls = module.getClassLoader().iterateResources(path, false);
+        String basePath = path;
+        while (basePath.startsWith("/"))
+            basePath = basePath.substring(1);
+        while (basePath.endsWith("/"))
+            basePath = basePath.substring(0, basePath.length() - 1);
+        String prefix = basePath.length() > 0 ? basePath + "/" : "";
 
-        Vector<String> result = new Vector<>();
-        while (urls.hasNext())
-            result.add(urls.next().getName());
+        // The entries directly below the path, a sub directory has a trailing slash
+        Set<String> result = new LinkedHashSet<>();
+        Iterator<Resource> resources = module.getClassLoader().iterateResources(basePath, true);
+        while (resources.hasNext()) {
+            String name = resources.next().getName();
+            if (name.startsWith("/"))
+                name = name.substring(1);
+            if (name.length() > prefix.length() && name.startsWith(prefix)) {
+                int index = name.indexOf('/', prefix.length());
+                result.add(index < 0 ? name : name.substring(0, index + 1));
+            }
+        }
 
-        return result.elements();
+        // Null if there are no entries
+        return result.isEmpty() ? null : new Vector<>(result).elements();
     }
 
     @Override
