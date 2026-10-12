@@ -31,7 +31,6 @@ import java.util.Map;
 import org.jboss.osgi.spi.util.ServiceLoader;
 import org.jboss.osgi.testing.OSGiFrameworkTest;
 import org.junit.BeforeClass;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.launch.Framework;
@@ -52,7 +51,6 @@ public class NativeCodePermissionsTestCase extends OSGiFrameworkTest {
     }
 
     @Test
-    @Ignore
     public void testNativeCodeExecPermission() throws Exception {
         String tempFileName = System.getProperty("java.io.tmpdir") + "/osgi_native" + System.currentTimeMillis() + ".test";
         File tempFile = new File(tempFileName);

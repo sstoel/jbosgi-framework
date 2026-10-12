@@ -34,7 +34,6 @@ import org.jboss.test.osgi.framework.bundle.support.lifecycle2.ActivatorB;
 import org.jboss.test.osgi.framework.bundle.support.lifecycle3.ActivatorC;
 import org.junit.Assert;
 import org.junit.BeforeClass;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleActivator;
@@ -209,7 +208,6 @@ public class StartLevelTestCase extends OSGiFrameworkTest {
     }
 
     @Test
-    @Ignore
     public void testChangingBundleStartLevel() throws Exception {
         JavaArchive archive1 = createTestBundle("b1.jar", ActivatorA.class);
 

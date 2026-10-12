@@ -33,7 +33,6 @@ import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.jboss.test.osgi.framework.simple.bundleA.BeanA;
 import org.jboss.test.osgi.framework.simple.bundleB.BeanB;
 import org.junit.Assert;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
@@ -213,7 +212,6 @@ public class PersistentBundlesTestCase extends AbstractFrameworkLaunchTest {
     }
 
     @Test
-    @Ignore
     public void testBundleStartLevel() throws Exception {
         Map<String, String> initprops = getFrameworkInitProperties(true);
         Framework framework = newFramework(initprops);
@@ -244,6 +242,8 @@ public class PersistentBundlesTestCase extends AbstractFrameworkLaunchTest {
         bundle = syscontext.getBundle(bundle.getBundleId());
         Assert.assertNotNull("Bundle available", bundle);
 
+        // The start level of the bundle is persistent
+        startLevel = bundle.adapt(BundleStartLevel.class);
         Assert.assertEquals(3, startLevel.getStartLevel());
 
         assertBundleState(Bundle.INSTALLED, bundle.getState());

@@ -149,7 +149,7 @@ public class ModuleBundleTestCase extends AbstractModuleIntegrationTest {
     }
 
     @Test
-    @Ignore
+    @Ignore("A bundle that adapts a module has no start level")
     public void testStartLevel() throws Exception {
         FrameworkStartLevel fwStartLevel = getFramework().adapt(FrameworkStartLevel.class);
         int orgStartLevel = fwStartLevel.getStartLevel();

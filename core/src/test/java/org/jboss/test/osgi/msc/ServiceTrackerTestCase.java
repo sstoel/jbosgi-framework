@@ -142,7 +142,7 @@ public class ServiceTrackerTestCase extends AbstractServiceTestCase {
 
 
     @Test
-    @Ignore
+    @Ignore("The tracker is not notified when a dependency that it does not track fails")
     public void testUntrackedDependencyFailed() throws Exception {
 
         ServiceTracker tracker = new ServiceTracker();

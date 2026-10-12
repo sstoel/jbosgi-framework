@@ -68,6 +68,17 @@ public class FrameworkClassLoaderTestCase extends AbstractFrameworkTest {
     }
 
     @Test
+    public void testLoadPlatformClassFail() throws Exception {
+        // A package of the Java platform that is not a system package
+        try {
+            classLoader.loadClass("jdk.net.Sockets");
+            fail("ClassNotFoundException expected");
+        } catch (ClassNotFoundException ex) {
+            // expected
+        }
+    }
+
+    @Test
     public void testLoadClassSuccess() throws Exception {
         Class<?> result = classLoader.loadClass(BundleActivator.class.getName());
         assertNotNull("BundleActivator loaded", result);
