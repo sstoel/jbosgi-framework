@@ -79,6 +79,7 @@ import org.jboss.osgi.framework.spi.LockManager.LockContext;
 import org.jboss.osgi.framework.spi.LockManager.LockableItem;
 import org.jboss.osgi.framework.spi.LockManager.Method;
 import org.jboss.osgi.framework.spi.ModuleManager;
+import org.jboss.osgi.framework.spi.StorageManager;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.metadata.OSGiMetaData;
 import org.jboss.osgi.resolver.XBundle;
@@ -581,6 +582,10 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             resourceId = new Long(storageState.getBundleId());
         } else {
             XEnvironment env = injectedEnvironment.getValue();
+            // The id is higher than any id that was assigned before, also before the framework was launched again (4.4.3)
+            StorageManager storageManager = getFrameworkState().getStorageManager();
+            if (storageManager instanceof StorageManagerImpl)
+                env.nextResourceIdentifier(((StorageManagerImpl) storageManager).getLastBundleId(), symbolicName);
             resourceId = env.nextResourceIdentifier(null, symbolicName);
         }
         return new RevisionIdentifier(resourceId);

@@ -27,6 +27,9 @@ import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
@@ -53,9 +56,15 @@ import org.osgi.framework.Constants;
  */
 public final class StorageManagerImpl implements StorageManager {
 
+    // The highest bundle id that the framework assigned, a bundle id is not used again (4.4.3)
+    private static final String LAST_BUNDLE_ID_FILE = "last-bundle-id";
+    // The data area of a bundle, the bundle directory also holds the files of the framework
+    private static final String DATA_DIRECTORY = "data";
+
     private final BundleManagerPlugin bundleManager;
     private final Map<String, StorageState> storageStates = new ConcurrentHashMap<String, StorageState>();
     private final File storageArea;
+    private volatile long lastBundleId;
 
     public StorageManagerImpl(BundleManager bundleManager) {
         this.bundleManager = (BundleManagerPlugin) bundleManager;
@@ -94,10 +103,20 @@ public final class StorageManagerImpl implements StorageManager {
                 return name.startsWith(StorageState.BUNDLE_DIRECTORY_PREFIX);
             }
         };
+        lastBundleId = readLastBundleId();
         File[] storageDirs = getStorageArea().listFiles(filter);
         if (storageDirs != null) {
             for (File storageDir : storageDirs) {
-                StorageState storageState = restoreStorageState(storageDir);
+                lastBundleId = Math.max(lastBundleId, getBundleId(storageDir));
+
+                // A directory that cannot be restored, like one that a failed install left behind, is skipped
+                StorageState storageState;
+                try {
+                    storageState = restoreStorageState(storageDir);
+                } catch (IOException | RuntimeException ex) {
+                    LOGGER.warnf(ex, "Cannot restore the bundle storage, it is skipped: %s", storageDir);
+                    continue;
+                }
                 if (storageState == null)
                     continue;
                 if (storageState.getBundleId() != 0) {
@@ -148,6 +167,18 @@ public final class StorageManagerImpl implements StorageManager {
         File bundleDir = getStorageDir(bundleId);
         Properties props = StorageState.loadProperties(bundleDir);
         String previousRev = props.getProperty(StorageState.PROPERTY_BUNDLE_REV);
+        String previousLocation = props.getProperty(StorageState.PROPERTY_BUNDLE_LOCATION);
+        if (bundleId != 0 && previousRev != null && !location.equals(previousLocation)) {
+            // A stale directory of another bundle, its data area must not be given to this bundle (4.5.2)
+            LOGGER.warnf("Removing the stale storage of bundle %d with location: %s", bundleId, previousLocation);
+            StorageState stale = previousLocation != null ? storageStates.get(previousLocation) : null;
+            if (stale != null && bundleDir.equals(stale.getStorageDir()))
+                storageStates.remove(previousLocation);
+            deleteRecursive(bundleDir);
+            bundleDir = getStorageDir(bundleId);
+            props = new Properties();
+            previousRev = null;
+        }
         int revision = (bundleId != 0 && previousRev != null ? Integer.parseInt(previousRev) + 1 : 0);
 
         // Write the bundle properties
@@ -164,11 +195,65 @@ public final class StorageManagerImpl implements StorageManager {
         } else {
             props.remove(StorageState.PROPERTY_CONNECT_BUNDLE);
         }
-        StorageState storageState = StorageState.createStorageState(bundleDir, rootFile, props, connect == false);
+        // A new bundle gets its data area right away, the files of an older storage layout are only moved for existing bundles
+        if (previousRev == null)
+            new File(bundleDir, DATA_DIRECTORY).mkdirs();
+
+        StorageState storageState;
+        try {
+            storageState = StorageState.createStorageState(bundleDir, rootFile, props, connect == false);
+        } catch (IOException | RuntimeException ex) {
+            // The directory of a new bundle would stay without its properties
+            if (previousRev == null)
+                deleteRecursive(bundleDir);
+            throw ex;
+        }
         if (storageState.getBundleId() != 0) {
             storageStates.put(storageState.getLocation(), storageState);
         }
+        if (bundleId > lastBundleId) {
+            lastBundleId = bundleId;
+            writeLastBundleId(bundleId);
+        }
         return storageState;
+    }
+
+    /**
+     * The highest bundle id that was assigned, also to bundles that are uninstalled.
+     */
+    long getLastBundleId() {
+        return lastBundleId;
+    }
+
+    private long readLastBundleId() {
+        File file = new File(getStorageArea(), LAST_BUNDLE_ID_FILE);
+        if (file.isFile() == false)
+            return 0;
+        try {
+            return Long.parseLong(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim());
+        } catch (IOException | NumberFormatException ex) {
+            LOGGER.warnf(ex, "Cannot read the last bundle id: %s", file);
+            return 0;
+        }
+    }
+
+    private void writeLastBundleId(long bundleId) {
+        File file = new File(getStorageArea(), LAST_BUNDLE_ID_FILE);
+        File tmpFile = new File(getStorageArea(), LAST_BUNDLE_ID_FILE + ".tmp");
+        try {
+            Files.write(tmpFile.toPath(), Long.toString(bundleId).getBytes(StandardCharsets.UTF_8));
+            Files.move(tmpFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException ex) {
+            LOGGER.warnf(ex, "Cannot write the last bundle id: %s", file);
+        }
+    }
+
+    private static long getBundleId(File storageDir) {
+        try {
+            return Long.parseLong(storageDir.getName().substring(StorageState.BUNDLE_DIRECTORY_PREFIX.length()));
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
     }
 
     @Override
@@ -218,8 +303,8 @@ public final class StorageManagerImpl implements StorageManager {
 
     @Override
     public File getDataFile(long bundleId, String filename) {
-        File bundleDir = getStorageDir(bundleId);
-        File dataFile = new File(bundleDir.getAbsolutePath() + File.separator + filename);
+        File dataDir = getDataArea(bundleId);
+        File dataFile = new File(dataDir.getAbsolutePath() + File.separator + filename);
         dataFile.getParentFile().mkdirs();
 
         String filePath = dataFile.getAbsolutePath();
@@ -229,6 +314,29 @@ public final class StorageManagerImpl implements StorageManager {
             // ignore
         }
         return new File(filePath);
+    }
+
+    /**
+     * The data area of a bundle. A bundle that used the bundle directory itself as its data area before, gets its files
+     * moved to the data area, the files of the framework stay.
+     */
+    private synchronized File getDataArea(long bundleId) {
+        File bundleDir = getStorageDir(bundleId);
+        File dataDir = new File(bundleDir, DATA_DIRECTORY);
+        if (dataDir.isDirectory() == false) {
+            dataDir.mkdirs();
+            File[] files = bundleDir.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    String name = file.getName();
+                    boolean frameworkFile = name.equals(DATA_DIRECTORY) || name.equals(StorageState.BUNDLE_PERSISTENT_PROPERTIES)
+                            || (name.startsWith(StorageState.BUNDLE_DIRECTORY_PREFIX) && name.contains("-rev-") && name.endsWith(".jar"));
+                    if (frameworkFile == false && file.renameTo(new File(dataDir, name)) == false)
+                        LOGGER.warnf("Cannot move %s to the data area of bundle %d", file, bundleId);
+                }
+            }
+        }
+        return dataDir;
     }
 
     private void deleteRecursive(File file) {

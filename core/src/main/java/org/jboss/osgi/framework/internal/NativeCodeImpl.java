@@ -446,9 +446,12 @@ public final class NativeCodeImpl implements NativeCode {
             }
         }
 
+        // A file of the framework in the storage directory of the bundle, not in the data area of the bundle
         private File getUniqueLibraryFile(UserBundleState userBundle, String libpath) {
             StorageManager storagePlugin = userBundle.getFrameworkState().getStorageManager();
-            return storagePlugin.getDataFile(userBundle.getBundleId(), libpath);
+            File libraryFile = new File(storagePlugin.getStorageDir(userBundle.getBundleId()), libpath);
+            libraryFile.getParentFile().mkdirs();
+            return libraryFile;
         }
     }
 }
