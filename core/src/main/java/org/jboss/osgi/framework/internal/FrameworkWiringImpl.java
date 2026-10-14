@@ -196,22 +196,29 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             }
         }
 
+        // The bundles of the dependency closure are locked for the whole refresh. The framework wiring lock is only held
+        // while the bundles are stopped and started: the refresh policy of an integration may undeploy and deploy a
+        // bundle with operations of its server, which must not wait for that lock (another operation of the server
+        // may hold the server's lock and wait for the framework wiring lock)
         LockableItem wireLock = lockManager.getItemForType(FrameworkWiringLock.class);
         XBundle[] bundles = dependencyClosure.toArray(new XBundle[dependencyClosure.size()]);
-        LockableItem[] items = LockUtils.getLockableItems(bundles, new LockableItem[] { wireLock });
-        LockContext context = lockManager.lockItems(Method.REFRESH, items);
+        LockContext context = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, null));
         try {
-            // Lock the dependency closure
             BundleStartLevelComparator startLevelComparator = new BundleStartLevelComparator();
             Collections.sort(stopList, startLevelComparator);
 
-            for (ListIterator<XBundle> it = stopList.listIterator(stopList.size()); it.hasPrevious();) {
-                XBundle bundle = it.previous();
-                try {
-                    bundleManager.stopBundleLifecycle(bundle, Bundle.STOP_TRANSIENT);
-                } catch (Exception th) {
-                    events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
+            LockContext wiringContext = lockManager.lockItems(Method.REFRESH, wireLock);
+            try {
+                for (ListIterator<XBundle> it = stopList.listIterator(stopList.size()); it.hasPrevious();) {
+                    XBundle bundle = it.previous();
+                    try {
+                        bundleManager.stopBundleLifecycle(bundle, Bundle.STOP_TRANSIENT);
+                    } catch (Exception th) {
+                        events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
+                    }
                 }
+            } finally {
+                lockManager.unlockItems(wiringContext);
             }
 
             List<UserBundleState> removeBundles = new ArrayList<UserBundleState>();
@@ -255,16 +262,21 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
                 }
             }
 
-            for (XBundle bundle : stopList) {
-                try {
-                    bundleManager.startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
-                } catch (Exception th) {
-                    events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
+            wiringContext = lockManager.lockItems(Method.REFRESH, wireLock);
+            try {
+                for (XBundle bundle : stopList) {
+                    try {
+                        bundleManager.startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
+                    } catch (Exception th) {
+                        events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
+                    }
                 }
-            }
 
-            XBundle systemBundle = bundleManager.getSystemBundle();
-            events.fireFrameworkEvent(systemBundle, FrameworkEvent.PACKAGES_REFRESHED, null, listeners);
+                XBundle systemBundle = bundleManager.getSystemBundle();
+                events.fireFrameworkEvent(systemBundle, FrameworkEvent.PACKAGES_REFRESHED, null, listeners);
+            } finally {
+                lockManager.unlockItems(wiringContext);
+            }
         } finally {
             lockManager.unlockItems(context);
         }
