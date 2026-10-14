@@ -25,11 +25,13 @@ import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.internal.InternalConstants.MODULE_KEY;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.jboss.modules.Module;
 import org.jboss.msc.service.ServiceTarget;
@@ -51,6 +53,8 @@ import org.osgi.framework.wiring.BundleRevision;
  * @since 29-Jun-2010
  */
 abstract class UserBundleRevision extends BundleStateRevision {
+
+    private static final AtomicLong classPathMounts = new AtomicLong();
 
     private final Deployment deployment;
     private final ServiceTarget serviceTarget;
@@ -198,7 +202,7 @@ abstract class UserBundleRevision extends BundleStateRevision {
                 try {
                     VirtualFile child = rootFile.getChild(path);
                     if (child != null) {
-                        VirtualFile anotherRoot = AbstractVFS.toVirtualFile(child.toURL());
+                        VirtualFile anotherRoot = getClassPathRoot(child);
                         RevisionContent revContent = new RevisionContent(this, metadata, bundleId, bundleClassPath.size(), anotherRoot);
                         bundleClassPath.add(revContent);
                     }
@@ -208,5 +212,22 @@ abstract class UserBundleRevision extends BundleStateRevision {
             }
         }
         return rootContent;
+    }
+
+    /**
+     * The root of a Bundle-ClassPath entry. A JAR is mounted at a path of its own: mounted over its path in the
+     * bundle content, it would be a directory in the entries of the bundle.
+     */
+    private static VirtualFile getClassPathRoot(VirtualFile child) throws IOException {
+        if (child.isDirectory())
+            return AbstractVFS.toVirtualFile(child.toURL());
+
+        String name = "osgi-bundle-classpath/" + classPathMounts.incrementAndGet() + "/" + child.getName();
+        InputStream input = child.openStream();
+        try {
+            return AbstractVFS.toVirtualFile(name, input);
+        } finally {
+            input.close();
+        }
     }
 }
