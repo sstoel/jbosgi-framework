@@ -211,15 +211,15 @@ final class FrameworkEventsImpl implements FrameworkEvents {
     public void addServiceListener(final XBundle bundleState, final ServiceListener listener, final String filterstr) throws InvalidSyntaxException {
         assert listener != null : "Null listener";
         synchronized (serviceListeners) {
+            // If the context bundleState's list of listeners already contains a listener l such that (l==listener),
+            // then this method replaces that listener's filter (which may be null) with the specified one (which may be null).
+            removeServiceListener(bundleState, listener);
+
             List<ServiceListenerRegistration> listeners = serviceListeners.get(bundleState);
             if (listeners == null) {
                 listeners = new ArrayList<ServiceListenerRegistration>();
                 serviceListeners.put(bundleState, listeners);
             }
-
-            // If the context bundleState's list of listeners already contains a listener l such that (l==listener),
-            // then this method replaces that listener's filter (which may be null) with the specified one (which may be null).
-            removeServiceListener(bundleState, listener);
 
             // Create the new listener registration
             Filter filter = (filterstr != null ? FrameworkUtil.createFilter(filterstr) : NoFilter.INSTANCE);
@@ -265,6 +265,10 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                 int index = listeners.indexOf(slreg);
                 if (index >= 0) {
                     slreg = listeners.remove(index);
+
+                    // The map must not keep the bundle when it has no listeners any more
+                    if (listeners.isEmpty())
+                        serviceListeners.remove(bundleState);
 
                     // The {@link ListenerHook} 'removed' method is called to provide the hook implementation with information
                     // on newly removed service listeners.

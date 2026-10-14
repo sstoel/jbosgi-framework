@@ -137,6 +137,9 @@ public final class BundleServices {
             ((ServiceStateImpl<?>) serviceState).releasePrototypeValues(bundle);
             serviceState.removeUsingBundle(bundle);
         }
+        // Any listeners registered by the bundle must be removed (Bundle.stop step 7)
         frameworkEvents.removeBundleListeners(bundle);
+        frameworkEvents.removeServiceListeners(bundle);
+        frameworkEvents.removeFrameworkListeners(bundle);
     }
 }
