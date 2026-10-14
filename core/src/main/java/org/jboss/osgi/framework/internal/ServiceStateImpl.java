@@ -37,6 +37,7 @@ import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -78,7 +79,8 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     // The registration that is passed to a prototype factory, also after the service is unregistered
     private final ServiceRegistration<S> factoryRegistration;
     private Set<XBundle> usingBundles;
-    private Map<Long, ServiceFactoryHolder<S>> factoryValues;
+    // The service objects of a ServiceFactory by the bundle that uses them, removed when the bundle does not use it any more
+    private final Map<Long, ServiceFactoryHolder<S>> factoryValues = new ConcurrentHashMap<Long, ServiceFactoryHolder<S>>();
     private Map<Long, Map<S, Integer>> prototypeValues;
     private Map<Long, XBundle> prototypeBundles;
     private boolean prototypeValuesReleased;
@@ -143,17 +145,20 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         // Get the ServiceFactory value
         S result = null;
         try {
-            if (factoryValues == null)
-                factoryValues = new HashMap<Long, ServiceFactoryHolder<S>>();
-
-            ServiceFactoryHolder<S> factoryHolder = getFactoryHolder(bundle);
-            if (factoryHolder == null) {
-                ServiceFactory factory = (ServiceFactory) valueProvider.getValue();
-                factoryHolder = new ServiceFactoryHolder<S>(bundle, factory);
-                factoryValues.put(bundle.getBundleId(), factoryHolder);
+            // The factory is called for one bundle at a time, the holder of a bundle is only removed under the same lock
+            synchronized (bundle) {
+                ServiceFactoryHolder<S> factoryHolder = getFactoryHolder(bundle);
+                if (factoryHolder == null) {
+                    ServiceFactory factory = (ServiceFactory) valueProvider.getValue();
+                    factoryHolder = new ServiceFactoryHolder<S>(bundle, factory);
+                    factoryValues.put(bundle.getBundleId(), factoryHolder);
+                }
+                try {
+                    result = factoryHolder.getService();
+                } finally {
+                    removeUnusedFactoryHolder(factoryHolder);
+                }
             }
-
-            result = factoryHolder.getService();
 
             // If the service object returned by the ServiceFactory object is not an instanceof all the classes named
             // when the service was registered or the ServiceFactory object throws an exception,
@@ -173,16 +178,26 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     @Override
     public void ungetScopedValue(XBundle bundle) {
         if (valueProvider.isFactoryValue()) {
-            ServiceFactoryHolder factoryHolder = getFactoryHolder(bundle);
-            if (factoryHolder != null) {
-                try {
-                    factoryHolder.ungetService();
-                } catch (RuntimeException rte) {
-                    ServiceException sex = new ServiceException("Cannot unget factory value", ServiceException.FACTORY_EXCEPTION, rte);
-                    serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.WARNING, sex);
+            synchronized (bundle) {
+                ServiceFactoryHolder<S> factoryHolder = getFactoryHolder(bundle);
+                if (factoryHolder != null) {
+                    try {
+                        factoryHolder.ungetService();
+                    } catch (RuntimeException rte) {
+                        ServiceException sex = new ServiceException("Cannot unget factory value", ServiceException.FACTORY_EXCEPTION, rte);
+                        serviceManager.fireFrameworkEvent(bundle, FrameworkEvent.WARNING, sex);
+                    } finally {
+                        removeUnusedFactoryHolder(factoryHolder);
+                    }
                 }
             }
         }
+    }
+
+    // A holder keeps its bundle, it is removed when the bundle does not use the service any more
+    private void removeUnusedFactoryHolder(ServiceFactoryHolder<S> factoryHolder) {
+        if (factoryHolder.useCount.get() == 0)
+            factoryValues.remove(factoryHolder.bundle.getBundleId(), factoryHolder);
     }
 
     private String getServiceScope() {
@@ -351,7 +366,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     }
 
     private ServiceFactoryHolder<S> getFactoryHolder(XBundle bundle) {
-        return factoryValues != null ? factoryValues.get(bundle.getBundleId()) : null;
+        return factoryValues.get(bundle.getBundleId());
     }
 
     @Override
