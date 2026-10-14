@@ -235,19 +235,14 @@ public final class NativeCodeImpl implements NativeCode {
         }
     }
 
+    // The values of a parameter, a parameter that is given more than once in a clause has a collection of values
     @SuppressWarnings({ "unchecked" })
-    private List<String> getCollection(Object value, boolean allowsplit) {
+    private List<String> getCollection(Object value) {
         if (value == null)
             return Collections.emptyList();
 
         if (value instanceof Collection)
             return new ArrayList<String>((Collection<String>) value);
-
-        if (value instanceof String && allowsplit) {
-            String valueString = (String) value;
-            String[] split = valueString.split(",\\s");
-            return Arrays.asList(split);
-        }
 
         return Collections.singletonList(value.toString());
     }
@@ -270,7 +265,7 @@ public final class NativeCodeImpl implements NativeCode {
             String fwOSName = systemContext.getProperty(Constants.FRAMEWORK_OS_NAME);
 
             boolean osmatch = false;
-            Collection<String> osNames = getCollection(osnameParam.getValue(), true);
+            Collection<String> osNames = getCollection(osnameParam.getValue());
             for (String osname : osNames) {
                 osmatch = osname.equalsIgnoreCase(fwOSName);
                 if(!osmatch) {
@@ -299,7 +294,7 @@ public final class NativeCodeImpl implements NativeCode {
             String fwProcessor = systemContext.getProperty(Constants.FRAMEWORK_PROCESSOR);
 
             boolean procmatch = false;
-            List<String> processors = getCollection(procParam.getValue(), true);
+            List<String> processors = getCollection(procParam.getValue());
             for (String proc : processors) {
                 procmatch = (proc.equals(fwProcessor) || proc.equals(processorAlias.get(fwProcessor)));
                 if (procmatch == true)
@@ -317,11 +312,12 @@ public final class NativeCodeImpl implements NativeCode {
             boolean versionMatch = false;
             Version currentVersion = Version.parseVersion(fwOSVersion);
 
-            String versionRange = (String) osversionParam.getValue();
-            if (versionRange != null) {
+            // The ranges of a repeated osversion are ORed
+            for (String versionRange : getCollection(osversionParam.getValue())) {
                 VersionRange vr = new VersionRange(versionRange);
                 if (vr.includes(currentVersion)) {
                     versionMatch = true;
+                    break;
                 }
             }
 
@@ -334,7 +330,7 @@ public final class NativeCodeImpl implements NativeCode {
             String fwLanguage = systemContext.getProperty(Constants.FRAMEWORK_LANGUAGE);
 
             boolean languageMatch = false;
-            for (String language : getCollection(languageParam.getValue(), true)) {
+            for (String language : getCollection(languageParam.getValue())) {
                 if (language.equals(fwLanguage)) {
                     languageMatch = true;
                     break;
@@ -349,12 +345,13 @@ public final class NativeCodeImpl implements NativeCode {
         if (match && filterSelectionParam != null) {
             boolean filterMatch = false;
             Dictionary<String, Object> frameworkProps = new Hashtable<String, Object>(bundleManager.getProperties());
-            String filterSpec = (String) filterSelectionParam.getValue();
-            if (filterSpec != null) {
+            // The filters of a repeated selection-filter are ORed
+            for (String filterSpec : getCollection(filterSelectionParam.getValue())) {
                 try {
                     Filter filter = FrameworkUtil.createFilter(filterSpec);
                     if (filter.match(frameworkProps)) {
                         filterMatch = true;
+                        break;
                     }
                 } catch (InvalidSyntaxException ex) {
                     throw MESSAGES.invalidFilterExpression(ex, filterSpec);
