@@ -367,12 +367,16 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             FrameworkModuleLoader provider = getPluginService(IntegrationServices.FRAMEWORK_MODULE_LOADER_PLUGIN, FrameworkModuleLoader.class);
             provider.removeModule(brev);
 
-            // The bundle context is no longer valid
+            // The bundle context is no longer valid. It is closed outside the monitor: the close releases the services and
+            // listeners of the bundle, which takes the monitors of services and listeners and calls out to their users
+            ModuleBundleContext closing;
             synchronized (this) {
-                if (bundleContext != null) {
-                    bundleContext.close();
-                    bundleContext = null;
-                }
+                closing = bundleContext;
+            }
+            if (closing != null)
+                closing.close();
+            synchronized (this) {
+                bundleContext = null;
                 bundleState.set(Bundle.UNINSTALLED);
             }
         } finally {

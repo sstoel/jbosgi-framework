@@ -37,6 +37,7 @@ import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jboss.osgi.framework.spi.ServiceManager;
@@ -81,6 +82,8 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private Map<Long, Map<S, Integer>> prototypeValues;
     private Map<Long, XBundle> prototypeBundles;
     private boolean prototypeValuesReleased;
+    // Only one thread unregisters the service, the others see it as unregistered
+    private final AtomicBoolean unregistering = new AtomicBoolean();
 
     // The properties
     private CaseInsensitiveDictionary prevProperties;
@@ -370,11 +373,18 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     @Override
     public void unregister() {
         assertNotUnregistered();
-        unregisterInternal();
+        if (unregistering.compareAndSet(false, true) == false)
+            throw MESSAGES.illegalStateServiceUnregistered(this);
+        unregisterService();
     }
 
     @Override
     public void unregisterInternal() {
+        if (unregistering.compareAndSet(false, true))
+            unregisterService();
+    }
+
+    private void unregisterService() {
         serviceManager.unregisterService(this);
         usingBundles = null;
         registration = null;

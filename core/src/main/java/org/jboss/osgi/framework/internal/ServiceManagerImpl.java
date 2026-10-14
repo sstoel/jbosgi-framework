@@ -281,6 +281,11 @@ public final class ServiceManagerImpl implements ServiceManager {
 
     /**
      * Unregister the given service.
+     *
+     * Only the removal from the registry is done under the monitor of the service. The UNREGISTERING event and the
+     * release of the service by its users call out to listeners, hooks and service factories, which may take the
+     * monitor of another service that is unregistered at the same time. The service state lets only one thread
+     * unregister the service.
      */
     @Override
     public void unregisterService(ServiceState<?> serviceState) {
@@ -302,25 +307,25 @@ public final class ServiceManagerImpl implements ServiceManager {
                     }
                 }
             }
-
-            XBundle serviceOwner = serviceState.getServiceOwner();
-
-            // This event is synchronously delivered before the service has completed unregistering.
-            frameworkEvents.fireServiceEvent(serviceOwner, ServiceEvent.UNREGISTERING, serviceState);
-
-            // Remove from using bundles
-            for (XBundle bundle : serviceState.getUsingBundlesInternal()) {
-                while (ungetService(bundle, serviceState)) {
-                }
-                ((ServiceStateImpl<?>) serviceState).releasePrototypeValues(bundle);
-                serviceState.removeUsingBundle(bundle);
-            }
-            // A bundle may have got a prototype service object in the meantime
-            ((ServiceStateImpl<?>) serviceState).releaseAllPrototypeValues();
-
-            // Remove from owner bundle
-            BundleServices.get(serviceOwner).removeRegisteredService(serviceState);
         }
+
+        XBundle serviceOwner = serviceState.getServiceOwner();
+
+        // This event is synchronously delivered before the service has completed unregistering.
+        frameworkEvents.fireServiceEvent(serviceOwner, ServiceEvent.UNREGISTERING, serviceState);
+
+        // Remove from using bundles
+        for (XBundle bundle : serviceState.getUsingBundlesInternal()) {
+            while (ungetService(bundle, serviceState)) {
+            }
+            ((ServiceStateImpl<?>) serviceState).releasePrototypeValues(bundle);
+            serviceState.removeUsingBundle(bundle);
+        }
+        // A bundle may have got a prototype service object in the meantime
+        ((ServiceStateImpl<?>) serviceState).releaseAllPrototypeValues();
+
+        // Remove from owner bundle
+        BundleServices.get(serviceOwner).removeRegisteredService(serviceState);
     }
 
     /**
