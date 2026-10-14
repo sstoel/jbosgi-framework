@@ -185,7 +185,8 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
                         for (String version : versions) {
                             vlist += "," + version;
                         }
-                        capspec += ";version:" + (versions.size() > 1 ? "List<Version>" : "Version") + "=\"" + vlist.substring(1) + "\"";
+                        // The version attribute is a List<Version>, also for one version (Table 8.2)
+                        capspec += ";version:List<Version>=\"" + vlist.substring(1) + "\"";
                     }
                     builder.addProvidedCapabilities(capspec);
                 }
