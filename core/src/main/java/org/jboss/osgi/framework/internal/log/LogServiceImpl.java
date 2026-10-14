@@ -21,6 +21,7 @@
  */
 package org.jboss.osgi.framework.internal.log;
 
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -90,6 +91,18 @@ final class LogServiceImpl implements LogService {
                 logger = previous;
         }
         return loggerType.cast(logger);
+    }
+
+    /**
+     * Drop the loggers of a bundle that is uninstalled, the logger of a bundle refers to it.
+     */
+    void removeLoggers(Bundle loggerBundle) {
+        String prefix = loggerBundle.getBundleId() + "|";
+        Iterator<String> iterator = loggers.keySet().iterator();
+        while (iterator.hasNext()) {
+            if (iterator.next().startsWith(prefix))
+                iterator.remove();
+        }
     }
 
     @Override

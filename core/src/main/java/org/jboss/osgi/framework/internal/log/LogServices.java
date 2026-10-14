@@ -28,6 +28,8 @@ import java.util.Deque;
 import java.util.Enumeration;
 import java.util.Hashtable;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -73,6 +75,7 @@ public final class LogServices {
     private final LoggerAdminImpl loggerAdmin;
     private final List<ServiceRegistration<?>> registrations = new ArrayList<ServiceRegistration<?>>();
     private final List<LogListener> listeners = new CopyOnWriteArrayList<LogListener>();
+    private final Set<LogServiceImpl> logServices = ConcurrentHashMap.newKeySet();
     private final Deque<LogEntry> entries = new ArrayDeque<LogEntry>();
     private final AtomicLong sequence = new AtomicLong();
     private final EventLogger eventLogger = new EventLogger();
@@ -102,12 +105,14 @@ public final class LogServices {
         ServiceRegistration<?> logService = context.registerService(logServiceNames, new ServiceFactory<LogService>() {
             @Override
             public LogService getService(Bundle bundle, ServiceRegistration<LogService> registration) {
-                return new LogServiceImpl(LogServices.this, bundle);
+                LogServiceImpl service = new LogServiceImpl(LogServices.this, bundle);
+                logServices.add(service);
+                return service;
             }
 
             @Override
             public void ungetService(Bundle bundle, ServiceRegistration<LogService> registration, LogService service) {
-                // nothing to do
+                logServices.remove(service);
             }
         }, null);
         registrations.add(logService);
@@ -155,6 +160,7 @@ public final class LogServices {
         }
         registrations.clear();
         listeners.clear();
+        logServices.clear();
         if (executor != null) {
             executor.shutdown();
             try {
@@ -240,6 +246,11 @@ public final class LogServices {
         @Override
         public void bundleChanged(BundleEvent event) {
             Bundle bundle = event.getBundle();
+            // A logger that another bundle got for this bundle must not keep it
+            if (event.getType() == BundleEvent.UNINSTALLED) {
+                for (LogServiceImpl service : logServices)
+                    service.removeLoggers(bundle);
+            }
             String loggerName = getLoggerName("Events.Bundle", bundle);
             if (isEnabled(bundle, loggerName, LogLevel.INFO))
                 log(loggerName, bundle, null, LogLevel.INFO, LogLevel.INFO.ordinal(), "BundleEvent " + getBundleEventType(event.getType()), null);
