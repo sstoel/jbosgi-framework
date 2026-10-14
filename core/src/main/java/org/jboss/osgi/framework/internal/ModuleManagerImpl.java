@@ -632,7 +632,11 @@ public final class ModuleManagerImpl implements ModuleManager {
                     String path = packcap.getPackageName().replace('.', '/');
                     exportedPaths.add(path);
                 }
-                exportFilter = PathFilters.in(exportedPaths);
+                // An Import-Package dependency only re-exports the packages that the host also exports (substitution).
+                // Re-exporting more makes the linking of the module walk every path of the dependency graph
+                if (importPaths != null)
+                    exportedPaths.retainAll(importPaths);
+                exportFilter = exportedPaths.isEmpty() ? PathFilters.rejectAll() : PathFilters.in(exportedPaths);
             }
             if (importFilter == null) {
                 importFilter = (importPaths != null ? PathFilters.in(importPaths) : PathFilters.acceptAll());
