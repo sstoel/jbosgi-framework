@@ -200,6 +200,9 @@ final class FrameworkExtensions {
                     synchronized (attached) {
                         providers.addAll(attached);
                     }
+                    // The capabilities of the extension are those of the system bundle once it is attached,
+                    // an extension can import a package that it exports (3.8.1)
+                    providers.add(fragRev);
 
                     List<Wire> extwires = new ArrayList<Wire>();
                     List<Wire> hostedwires = new ArrayList<Wire>();
