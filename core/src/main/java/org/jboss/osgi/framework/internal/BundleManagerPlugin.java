@@ -684,6 +684,10 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         } finally {
             lockManager.unlockItems(lockContext);
         }
+
+        // Released without the locks of the uninstall, the bundle lifecycle may need them in another thread
+        if (bundle instanceof UserBundleState)
+            ((UserBundleState) bundle).removeUnusedUninstalledBundles(options);
     }
 
     void removeBundle(UserBundleState userBundle, int options) {

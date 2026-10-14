@@ -489,7 +489,20 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             bundleManager.removeBundle(this, options);
         }
 
-        // Remove other uninstalled bundles that now also are not in use any more
+        // #4 A bundle event of type BundleEvent.UNINSTALLED is fired
+        fireBundleEvent(BundleEvent.UNINSTALLED);
+
+        LOGGER.infoBundleUninstalled(this);
+    }
+
+    /**
+     * Remove other uninstalled bundles that now also are not in use any more.
+     *
+     * This is done when the uninstall released its locks: the bundle lifecycle may remove a bundle with an operation
+     * that needs them in another thread, like the undeploy of its deployment.
+     */
+    void removeUnusedUninstalledBundles(int options) {
+        BundleManagerPlugin bundleManager = getBundleManager();
         Set<XBundle> uninstalled = bundleManager.getBundles(Bundle.UNINSTALLED);
         for (XBundle auxState : uninstalled) {
             if (auxState != this) {
@@ -511,11 +524,6 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
                 }
             }
         }
-
-        // #4 A bundle event of type BundleEvent.UNINSTALLED is fired
-        fireBundleEvent(BundleEvent.UNINSTALLED);
-
-        LOGGER.infoBundleUninstalled(this);
     }
 
     @Override
