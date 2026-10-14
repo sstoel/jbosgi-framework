@@ -66,5 +66,7 @@ final class FrameworkEventsPlugin extends ExecutorServicePlugin<FrameworkEvents>
         events.removeAllBundleListeners();
         events.removeAllFrameworkListeners();
         events.removeAllServiceListeners();
+        // Ends the event thread
+        super.stop(context);
     }
 }

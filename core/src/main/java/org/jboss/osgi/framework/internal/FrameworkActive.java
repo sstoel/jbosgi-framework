@@ -171,6 +171,8 @@ public final class FrameworkActive extends AbstractFrameworkService {
     @Override
     public void stop(StopContext context) {
         BundleManagerPlugin bundleManager = injectedBundleManager.getValue();
+        // Stopped by the service container without Framework.stop: the bundles are stopped all the same
+        bundleManager.stopFrameworkServices();
         bundleManager.injectedFrameworkActive.uninject();
         super.stop(context);
     }

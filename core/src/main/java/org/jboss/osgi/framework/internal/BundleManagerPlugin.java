@@ -976,6 +976,49 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         getSystemBundle().changeState(Bundle.STOPPING);
         setManagerState(Bundle.STOPPING);
 
+        stopBundlesAndActivators();
+
+        // Shutdown all executor services
+        synchronized (executorServices) {
+            for (ExecutorService service : executorServices) {
+                service.shutdown();
+            }
+            for (ExecutorService service : executorServices) {
+                try {
+                    service.awaitTermination(10, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    // ignore
+                }
+            }
+        }
+
+        cachedSystemBundle = getSystemBundle();
+        shutdownContainer.shutdown();
+        setManagerState(Bundle.RESOLVED);
+    }
+
+    /**
+     * The framework services are stopped without {@link #shutdownManager(int)}, as the server does on a stop or a
+     * reload: the bundles are stopped like on a shutdown of the framework (start level 0), their persistent state is
+     * kept. The executors end with the services that own them.
+     */
+    void stopFrameworkServices() {
+        // A framework that is stopping or stopped through the system bundle has stopped its bundles
+        int state = getManagerState();
+        if (state == Bundle.STOPPING || state == Bundle.RESOLVED)
+            return;
+
+        SystemBundleState systemBundle = getSystemBundle();
+        if (systemBundle == null || systemBundle.getState() != Bundle.ACTIVE)
+            return;
+
+        LOGGER.debugf("Stop framework services");
+        systemBundle.changeState(Bundle.STOPPING);
+        stopBundlesAndActivators();
+        systemBundle.changeState(Bundle.RESOLVED);
+    }
+
+    private void stopBundlesAndActivators() {
         final CountDownLatch latch = new CountDownLatch(1);
         FrameworkListener listener = new FrameworkListener() {
             @Override
@@ -1000,24 +1043,6 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         // Stop the extension bundle activators before event handling is disabled
         frameworkExtensions.stopActivators();
         stopConnectActivator();
-
-        // Shutdown all executor services
-        synchronized (executorServices) {
-            for (ExecutorService service : executorServices) {
-                service.shutdown();
-            }
-            for (ExecutorService service : executorServices) {
-                try {
-                    service.awaitTermination(10, TimeUnit.SECONDS);
-                } catch (InterruptedException ex) {
-                    // ignore
-                }
-            }
-        }
-
-        cachedSystemBundle = getSystemBundle();
-        shutdownContainer.shutdown();
-        setManagerState(Bundle.RESOLVED);
     }
 
     /**
