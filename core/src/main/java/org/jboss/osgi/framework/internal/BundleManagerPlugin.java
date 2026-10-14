@@ -172,6 +172,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     private int stoppedEvent;
     private final FrameworkExtensions frameworkExtensions = new FrameworkExtensions(this);
     private BundleActivator connectActivator;
+    private final ConnectVirtualFile.OpenContents connectContents = new ConnectVirtualFile.OpenContents();
 
     @SuppressWarnings("deprecation")
     BundleManagerPlugin(ServiceContainer serviceContainer, FrameworkBuilder frameworkBuilder) {
@@ -881,7 +882,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             return null;
 
         try {
-            return ConnectVirtualFile.create(location, module.get());
+            return ConnectVirtualFile.create(location, module.get(), connectContents);
         } catch (IOException ex) {
             throw MESSAGES.cannotConnectBundle(ex, location);
         }

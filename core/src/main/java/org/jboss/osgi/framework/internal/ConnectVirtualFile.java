@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -68,12 +69,14 @@ final class ConnectVirtualFile implements VirtualFile {
 
     /**
      * Get the root file for the content of the given module.
+     *
+     * The revisions of a bundle can have the same content, the open contents tell when it is opened and closed.
      */
-    static ConnectVirtualFile create(String location, ConnectModule module) throws IOException {
+    static ConnectVirtualFile create(String location, ConnectModule module, OpenContents openContents) throws IOException {
         ConnectContent content = module.getContent();
         if (content == null)
             throw new IOException("No content for connect module: " + location);
-        return new Root(location, content).rootFile;
+        return new Root(location, content, openContents).rootFile;
     }
 
     static boolean isConnectFile(VirtualFile file) {
@@ -298,12 +301,43 @@ final class ConnectVirtualFile implements VirtualFile {
         return "connect[" + root.location + "]/" + path;
     }
 
+    /**
+     * The connect contents of a framework that are open, with the number of root files that use them.
+     *
+     * A module connector may return the same content for each updated revision of a bundle. The content is opened
+     * for the first root file that uses it, and it is closed when the last of them is closed.
+     */
+    static final class OpenContents {
+
+        private final Map<ConnectContent, Integer> users = new IdentityHashMap<ConnectContent, Integer>();
+
+        synchronized void open(ConnectContent content) throws IOException {
+            Integer count = users.get(content);
+            if (count == null)
+                content.open();
+            users.put(content, count == null ? 1 : count + 1);
+        }
+
+        synchronized void close(ConnectContent content) throws IOException {
+            Integer count = users.get(content);
+            if (count == null)
+                return;
+            if (count > 1) {
+                users.put(content, count - 1);
+            } else {
+                users.remove(content);
+                content.close();
+            }
+        }
+    }
+
     /** The state that the files of a connect content share */
     private static final class Root {
 
         private final String location;
         private final String host;
         private final ConnectContent content;
+        private final OpenContents openContents;
         private final ConnectVirtualFile rootFile;
         private final ConnectVirtualFile manifestFile;
         private Map<String, ConnectVirtualFile> files;
@@ -311,9 +345,10 @@ final class ConnectVirtualFile implements VirtualFile {
         private boolean headersRead;
         private boolean open;
 
-        Root(String location, ConnectContent content) {
+        Root(String location, ConnectContent content, OpenContents openContents) {
             this.location = location;
             this.content = content;
+            this.openContents = openContents;
             this.host = Integer.toHexString(System.identityHashCode(content));
             this.rootFile = new ConnectVirtualFile(this, "", true);
             this.manifestFile = new ConnectVirtualFile(this, JarFile.MANIFEST_NAME, false);
@@ -321,7 +356,7 @@ final class ConnectVirtualFile implements VirtualFile {
 
         synchronized ConnectContent open() throws IOException {
             if (open == false) {
-                content.open();
+                openContents.open(content);
                 open = true;
             }
             return content;
@@ -331,7 +366,7 @@ final class ConnectVirtualFile implements VirtualFile {
             if (open) {
                 open = false;
                 files = null;
-                content.close();
+                openContents.close(content);
             }
         }
 
