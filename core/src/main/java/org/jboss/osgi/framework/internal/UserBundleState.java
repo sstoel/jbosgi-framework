@@ -498,9 +498,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
                 XWiringSupport wiringSupport = brev.getWiringSupport();
                 if (!wiringSupport.isEffective()) {
                     BundleWiring bwiring = (BundleWiring) wiringSupport.getWiring(false);
+                    // Only this bundle stays, another uninstalled bundle may not be in use any more
                     if (bwiring != null && bwiring.isInUse()) {
                         bundleInUse = true;
-                        break;
                     }
                 }
                 if (bundleInUse == false) {

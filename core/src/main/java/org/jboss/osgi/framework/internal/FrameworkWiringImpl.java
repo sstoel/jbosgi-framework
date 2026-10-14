@@ -55,7 +55,6 @@ import org.jboss.osgi.resolver.XWiringSupport;
 import org.jboss.osgi.resolver.spi.AbstractBundleWire;
 import org.jboss.osgi.resolver.spi.ResolverHookException;
 import org.osgi.framework.Bundle;
-import org.osgi.framework.BundleException;
 import org.osgi.framework.Constants;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
@@ -215,9 +214,11 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
                 }
             }
 
+            List<UserBundleState> removeBundles = new ArrayList<UserBundleState>();
             for (XBundle bundle : uninstallBundles) {
                 if (bundle instanceof UserBundleState) {
-                    bundleManager.uninstallBundle(bundle, 0);
+                    // Removed when the bundles that depend on it are refreshed
+                    removeBundles.add((UserBundleState) bundle);
                 } else {
                     XBundleRevision current = bundle.getBundleRevision();
                     BundleRevisions brevs = bundle.adapt(BundleRevisions.class);
@@ -244,6 +245,16 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
                 }
             }
 
+            // No bundle uses the uninstalled bundles any more, their revisions are removed (7.5.1)
+            for (UserBundleState userBundle : removeBundles) {
+                try {
+                    bundleManager.unresolveBundle(userBundle);
+                    bundleManager.removeBundle(userBundle, InternalConstants.UNINSTALL_INTERNAL);
+                } catch (Exception th) {
+                    events.fireFrameworkEvent(userBundle, FrameworkEvent.ERROR, th);
+                }
+            }
+
             for (XBundle bundle : stopList) {
                 try {
                     bundleManager.startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
@@ -254,8 +265,6 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
 
             XBundle systemBundle = bundleManager.getSystemBundle();
             events.fireFrameworkEvent(systemBundle, FrameworkEvent.PACKAGES_REFRESHED, null, listeners);
-        } catch (BundleException ex) {
-            throw MESSAGES.illegalStateCannotRefreshBundles(ex);
         } finally {
             lockManager.unlockItems(context);
         }
