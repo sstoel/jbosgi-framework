@@ -44,6 +44,13 @@ public interface BundleLifecycle {
 
     void stop(XBundle bundle, int options) throws BundleException;
 
+    /**
+     * Uninstall the bundle through {@link BundleManager#uninstallBundle(XBundle, int)}. An integration may first remove
+     * what the bundle was installed with, without the locks of the framework; when that fails the bundle is not
+     * uninstalled.
+     */
+    void uninstall(XBundle bundle, int options) throws BundleException;
+
     void removeRevision(XBundleRevision brev, int options);
 
     BundleRefreshPolicy getBundleRefreshPolicy();

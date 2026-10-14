@@ -669,6 +669,21 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         }
     }
 
+    void uninstallBundleLifecycle(XBundle bundle, int options) throws BundleException {
+        // The headers stay available after the uninstall. They are taken now, the bundle lifecycle may remove the
+        // content of the bundle before the bundle is uninstalled
+        UserBundleState userBundle = bundle instanceof UserBundleState ? (UserBundleState) bundle : null;
+        if (userBundle != null)
+            userBundle.setHeadersBeforeUninstall(userBundle.getHeaders(null));
+        try {
+            BundleLifecycle bundleLifecycle = getBundleLifecycle();
+            bundleLifecycle.uninstall(bundle, options);
+        } finally {
+            if (userBundle != null)
+                userBundle.setHeadersBeforeUninstall(null);
+        }
+    }
+
     @Override
     public void uninstallBundle(XBundle bundle, int options) throws BundleException {
         LockManager lockManager = getFrameworkState().getLockManager();

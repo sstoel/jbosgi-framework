@@ -95,6 +95,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     private final List<UserBundleRevision> revisions = new ArrayList<UserBundleRevision>();
 
     private BundleActivator bundleActivator;
+    private volatile Dictionary<String, String> headersBeforeUninstall;
 
     UserBundleState(FrameworkState frameworkState, UserBundleRevision brev) {
         super(frameworkState, brev, brev.getStorageState().getBundleId());
@@ -439,6 +440,10 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         LOGGER.infoBundleRefreshed(this);
     }
 
+    void setHeadersBeforeUninstall(Dictionary<String, String> headers) {
+        headersBeforeUninstall = headers;
+    }
+
     @Override
     void uninstallInternal(int options) throws BundleException {
 
@@ -449,7 +454,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         LOGGER.debugf("Uninstalling bundle: %s", this);
 
         BundleManagerPlugin bundleManager = getBundleManager();
-        getBundleRevision().setHeadersOnUninstall(getHeaders(null));
+        Dictionary<String, String> headers = headersBeforeUninstall;
+        getBundleRevision().setHeadersOnUninstall(headers != null ? headers : getHeaders(null));
 
         // #2 If the bundle's state is ACTIVE, STARTING or STOPPING, the bundle is stopped
         if (isFragment() == false) {

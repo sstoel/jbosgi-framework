@@ -69,6 +69,11 @@ public class BundleLifecycleImpl implements BundleLifecycle {
         }
 
         @Override
+        public void uninstall(XBundle bundle, int options) throws BundleException {
+            bundleManager.uninstallBundle(bundle, options);
+        }
+
+        @Override
         public void removeRevision(XBundleRevision brev, int options) {
             bundleManager.removeRevision(brev, options);
         }
