@@ -310,7 +310,8 @@ public final class NativeCodeImpl implements NativeCode {
             String fwOSVersion = systemContext.getProperty(Constants.FRAMEWORK_OS_VERSION);
 
             boolean versionMatch = false;
-            Version currentVersion = Version.parseVersion(fwOSVersion);
+            // The same version as the osgi.native capability of the system bundle
+            Version currentVersion = BundleManagerPlugin.getOSVersion(fwOSVersion);
 
             // The ranges of a repeated osversion are ORed
             for (String versionRange : getCollection(osversionParam.getValue())) {

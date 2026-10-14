@@ -65,13 +65,8 @@ final class NativeNamespaceSupport {
                 if (NativeNamespace.CAPABILITY_PROCESSOR_ATTRIBUTE.equals(key))
                     return NativeCodeImpl.getProcessors(getStringProperty(Constants.FRAMEWORK_PROCESSOR));
                 if (NativeNamespace.CAPABILITY_OSVERSION_ATTRIBUTE.equals(key)) {
-                    String osVersion = getStringProperty(Constants.FRAMEWORK_OS_VERSION);
-                    try {
-                        return Version.parseVersion(osVersion);
-                    } catch (RuntimeException ex) {
-                        // A configured version like 5.15.0-91-generic, use the part of it that is a version
-                        return Version.parseVersion(BundleManagerPlugin.getOSVersionInOSGiFormat(osVersion));
-                    }
+                    // A configured version like 5.15.0-91-generic, the part of it that is a version
+                    return BundleManagerPlugin.getOSVersion(getStringProperty(Constants.FRAMEWORK_OS_VERSION));
                 }
                 if (NativeNamespace.CAPABILITY_LANGUAGE_ATTRIBUTE.equals(key))
                     return bundleManager.getProperty(Constants.FRAMEWORK_LANGUAGE);

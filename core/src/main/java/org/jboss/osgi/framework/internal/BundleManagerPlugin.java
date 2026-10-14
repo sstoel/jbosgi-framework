@@ -1080,6 +1080,26 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         return getOSVersionInOSGiFormat(SecurityActions.getSystemProperty("os.version", null));
     }
 
+    /**
+     * The os version as a version: the configured value, the part of it that is a version for a value like
+     * 5.15.0-91-generic or 1.2.3.a+b, or 0.0.0 when no part of it is a version.
+     */
+    static Version getOSVersion(String osVersion) {
+        if (osVersion == null)
+            return Version.emptyVersion;
+        String numeric = getOSVersionInOSGiFormat(osVersion);
+        String[] parts = numeric.split("\\.");
+        String withoutQualifier = parts.length > 3 ? parts[0] + "." + parts[1] + "." + parts[2] : numeric;
+        for (String candidate : new String[] { osVersion, numeric, withoutQualifier }) {
+            try {
+                return Version.parseVersion(candidate);
+            } catch (IllegalArgumentException ex) {
+                // try the next part
+            }
+        }
+        return Version.emptyVersion;
+    }
+
     static String getOSVersionInOSGiFormat(String sysVersion) {
         StringBuilder osgiVersion = new StringBuilder();
 
