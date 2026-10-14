@@ -29,6 +29,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.ListIterator;
@@ -107,7 +108,8 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
     public void refreshBundles(final Collection<Bundle> bundles, final FrameworkListener... listeners) {
 
         // Refreshing a framework extension requires the framework to be launched again
-        if (refreshesFrameworkExtension(bundles)) {
+        boolean relaunch = refreshesFrameworkExtension(bundles);
+        if (relaunch && bundleManager.isLaunchedByFramework()) {
             LOGGER.debugf("Refresh of framework extension, stop the framework: %s", bundles);
             new Thread("Framework refresh thread") {
                 @Override
@@ -127,6 +129,19 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
                 bundlesToRefresh.addAll(getRemovalPendingBundles());
             } else {
                 bundlesToRefresh.addAll(bundles);
+            }
+
+            // A framework that is not launched through its Framework object cannot be launched again by a refresh.
+            // The content of an extension stays attached until the framework is launched again, the other bundles are refreshed
+            if (relaunch) {
+                FrameworkExtensions extensions = bundleManager.getFrameworkExtensions();
+                for (Iterator<Bundle> it = bundlesToRefresh.iterator(); it.hasNext();) {
+                    Bundle bundle = it.next();
+                    if (bundle.getBundleId() == 0 || extensions.isAttached(bundle)) {
+                        LOGGER.warnf("Refresh of %s requires the framework to be launched again, it stays attached until then", bundle);
+                        it.remove();
+                    }
+                }
             }
 
             // Compute all depending bundles that need to be stopped and unresolved.

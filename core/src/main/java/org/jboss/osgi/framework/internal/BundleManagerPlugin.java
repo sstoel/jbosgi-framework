@@ -365,6 +365,15 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     }
 
     /**
+     * Whether the framework was launched through its {@link Framework} object, which can be stopped for the launcher to
+     * launch it again. An integration that creates the framework services itself (like WildFly) does not use it.
+     */
+    boolean isLaunchedByFramework() {
+        int state = getManagerState();
+        return state == Bundle.STARTING || state == Bundle.ACTIVE;
+    }
+
+    /**
      * The major version of the Java platform that the framework runs on.
      * This is taken from the java.specification.version framework property.
      */
