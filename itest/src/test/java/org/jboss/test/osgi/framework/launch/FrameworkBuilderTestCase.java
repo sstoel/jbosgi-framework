@@ -92,10 +92,11 @@ public class FrameworkBuilderTestCase extends AbstractFrameworkLaunchTest {
         assertBundleState(Bundle.INSTALLED, bundle.getState());
         Assert.assertNotNull("BundleContext not null", framework.getBundleContext());
 
+        // The framework stops on another thread
         framework.stop();
-        Assert.assertNull("BundleContext null", framework.getBundleContext());
         FrameworkEvent stopEvent = framework.waitForStop(2000);
         Assert.assertEquals(FrameworkEvent.STOPPED, stopEvent.getType());
+        Assert.assertNull("BundleContext null", framework.getBundleContext());
 
         Assert.assertNull("ServiceContainer is null", getServiceContainer());
     }

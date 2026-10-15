@@ -36,6 +36,7 @@ import org.jboss.msc.service.ServiceTarget;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
 import org.jboss.osgi.resolver.XBundle;
+import org.jboss.osgi.resolver.XBundleRevision;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleException;
 
@@ -69,7 +70,7 @@ public class BootstrapBundlesActivate<T> extends BootstrapBundlesService<T> {
         // Start the resolved bundles
         for (XBundle bundle : bundles) {
             try {
-                bundle.start(Bundle.START_ACTIVATION_POLICY);
+                bundle.start(getStartOptions(bundle));
             } catch (BundleException ex) {
                 LOGGER.errorCannotStartBundle(ex, bundle);
             }
@@ -77,6 +78,18 @@ public class BootstrapBundlesActivate<T> extends BootstrapBundlesService<T> {
 
         // We are done
         installCompleteService(startContext.getChildTarget());
+    }
+
+    /**
+     * A bundle restored from the storage is started with its stored autostart setting (eager or declared activation),
+     * which the start does not change. Other bundles are started with their declared activation policy.
+     */
+    private int getStartOptions(XBundle bundle) {
+        XBundleRevision brev = bundle.getBundleRevision();
+        StorageState storageState = brev != null ? brev.getAttachment(IntegrationConstants.STORAGE_STATE_KEY) : null;
+        if (storageState != null && storageState.isPersistentlyStarted())
+            return Bundle.START_TRANSIENT | (storageState.isBundleActivationPolicyUsed() ? Bundle.START_ACTIVATION_POLICY : 0);
+        return Bundle.START_ACTIVATION_POLICY;
     }
 
     protected ServiceController<T> installCompleteService(ServiceTarget serviceTarget) {

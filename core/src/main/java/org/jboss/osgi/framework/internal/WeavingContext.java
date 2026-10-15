@@ -37,6 +37,7 @@ import java.util.Set;
 
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.resolver.XBundle;
+import org.jboss.osgi.resolver.XBundleRevision;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
@@ -59,6 +60,8 @@ class WeavingContext {
     private static final Set<ServiceReference<WeavingHook>> blacklist = new HashSet<ServiceReference<WeavingHook>>();
 
     private final UserBundleState hostState;
+    // The revision whose class loader defines the classes, null if not known
+    private final XBundleRevision hostRev;
     private final WeavingContext parent;
     private final List<HookRegistration> weavingHooks;
     private final List<String> weavingImports = new ArrayList<String>();
@@ -69,14 +72,19 @@ class WeavingContext {
     }
 
     static WeavingContext create(UserBundleState hostState) {
+        return create(hostState, null);
+    }
+
+    static WeavingContext create(UserBundleState hostState, XBundleRevision hostRev) {
         // Defining a class loads its super types on the same thread, so contexts can be nested
-        WeavingContext context = new WeavingContext(hostState, contextAssociation.get());
+        WeavingContext context = new WeavingContext(hostState, hostRev, contextAssociation.get());
         contextAssociation.set(context);
         return context;
     }
 
-    private WeavingContext(UserBundleState hostState, WeavingContext parent) {
+    private WeavingContext(UserBundleState hostState, XBundleRevision hostRev, WeavingContext parent) {
         this.hostState = hostState;
+        this.hostRev = hostRev;
         this.parent = parent;
 
         BundleManagerPlugin bundleManager = hostState.getBundleManager();
@@ -274,6 +282,9 @@ class WeavingContext {
 
         @Override
         public BundleWiring getBundleWiring() {
+            // The wiring of the revision that defines the class, also when the bundle was updated meanwhile
+            if (hostRev != null)
+                return hostRev.getWiring();
             return hostState.adapt(BundleWiring.class);
         }
 

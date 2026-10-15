@@ -181,20 +181,24 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         return false;
     }
 
+    /**
+     * The listeners get the PACKAGES_REFRESHED event also when the refresh failed, the failure is an ERROR event
+     */
     private void refreshBundlesInternal(List<XBundle> dependencyClosure, FrameworkListener... listeners) {
+        XBundle systemBundle = bundleManager.getSystemBundle();
+        try {
+            refreshBundlesLocked(dependencyClosure);
+        } catch (Throwable th) {
+            events.fireFrameworkEvent(systemBundle, FrameworkEvent.ERROR, th);
+        } finally {
+            events.fireFrameworkEvent(systemBundle, FrameworkEvent.PACKAGES_REFRESHED, null, listeners);
+        }
+    }
+
+    private void refreshBundlesLocked(List<XBundle> dependencyClosure) {
 
         List<XBundle> stopList = new ArrayList<XBundle>();
         List<XBundle> uninstallBundles = new ArrayList<XBundle>();
-
-        for (Bundle auxBundle : dependencyClosure) {
-            XBundle bundle = (XBundle) auxBundle;
-            int state = bundle.getState();
-            if (state == Bundle.UNINSTALLED) {
-                uninstallBundles.add(bundle);
-            } else if (state == Bundle.ACTIVE || state == Bundle.STARTING) {
-                stopList.add(bundle);
-            }
-        }
 
         // The bundles of the dependency closure are locked for the whole refresh. The framework wiring lock is only held
         // while the bundles are stopped and started: the refresh policy of an integration may undeploy and deploy a
@@ -204,6 +208,17 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         XBundle[] bundles = dependencyClosure.toArray(new XBundle[dependencyClosure.size()]);
         LockContext context = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, null));
         try {
+            // The states are taken under the locks: a bundle that was started while the refresh waited is stopped too
+            for (Bundle auxBundle : dependencyClosure) {
+                XBundle bundle = (XBundle) auxBundle;
+                int state = bundle.getState();
+                if (state == Bundle.UNINSTALLED) {
+                    uninstallBundles.add(bundle);
+                } else if (state == Bundle.ACTIVE || state == Bundle.STARTING) {
+                    stopList.add(bundle);
+                }
+            }
+
             BundleStartLevelComparator startLevelComparator = new BundleStartLevelComparator();
             Collections.sort(stopList, startLevelComparator);
 
@@ -234,6 +249,10 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
                         if (brev != current) {
                             bundleManager.removeRevisionLifecycle(brev, 0);
                         }
+                    }
+                    // The removal pending revision of a module bundle whose module went away
+                    if (current.getWiringSupport().isEffective() == false) {
+                        bundleManager.removeRevision(current, 0);
                     }
                 }
                 dependencyClosure.remove(bundle);
@@ -271,9 +290,6 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
                         events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
                     }
                 }
-
-                XBundle systemBundle = bundleManager.getSystemBundle();
-                events.fireFrameworkEvent(systemBundle, FrameworkEvent.PACKAGES_REFRESHED, null, listeners);
             } finally {
                 lockManager.unlockItems(wiringContext);
             }
@@ -335,7 +351,7 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
                     XWiringSupport wiringSupport = brev.getWiringSupport();
                     if (!wiringSupport.isEffective()) {
                         BundleWiring bwiring = (BundleWiring) wiringSupport.getWiring(false);
-                        if (bwiring != null && bwiring.isInUse()) {
+                        if (bwiring != null && (bwiring.isInUse() || isModuleInUse(brev))) {
                             result.add(bundle);
                         }
                     }
@@ -343,6 +359,11 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             }
         }
         return Collections.unmodifiableCollection(result);
+    }
+
+    // The module of the revision may be used by modules that are not bundles
+    private boolean isModuleInUse(XBundleRevision brev) {
+        return bundleManager.getFrameworkState().getFrameworkModuleLoader().isModuleInUse(brev);
     }
 
     @Override

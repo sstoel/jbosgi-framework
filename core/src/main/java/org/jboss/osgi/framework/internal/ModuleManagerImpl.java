@@ -31,12 +31,14 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.jboss.modules.DependencySpec;
 import org.jboss.modules.LocalDependencySpecBuilder;
@@ -78,9 +80,11 @@ import org.jboss.osgi.resolver.XResource;
 import org.jboss.osgi.vfs.VFSUtils;
 import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.BundleReference;
+import org.osgi.framework.namespace.BundleNamespace;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleWire;
+import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.resource.Capability;
 import org.osgi.resource.Resource;
 
@@ -406,75 +410,134 @@ public final class ModuleManagerImpl implements ModuleManager {
             holder.addImportPath(path);
             importedPaths.add(path);
         }
-        PathFilter importedPathsFilter = PathFilters.in(importedPaths);
 
         for (BundleWire wire : bundleWires) {
             XBundleRevision exporter = (XBundleRevision) wire.getProvider();
-            if (packageExporters.contains(exporter))
-                continue;
-
             XRequirement xreq = (XRequirement) wire.getRequirement();
             XIdentityRequirement resreq = xreq.adapt(XIdentityRequirement.class);
+
+            // Only the exported packages of a required bundle are visible, also those that it re-exports, unless
+            // they are imported with Import-Package. A provider that is also an Import-Package exporter has one
+            // dependency for both
+            Set<String> requiredPaths = getRequiredBundlePaths(exporter, new HashSet<XBundleRevision>());
+            requiredPaths.removeAll(importedPaths);
             ModuleDependencyHolder holder = getDependencyHolder(depBuilderMap, exporter);
-            holder.setImportFilter(PathFilters.not(importedPathsFilter));
-            holder.setOptional(resreq.isOptional());
+            holder.addRequiredPaths(requiredPaths);
+            if (packageExporters.contains(exporter) == false)
+                holder.setOptional(resreq.isOptional());
 
             boolean reexport = VISIBILITY_REEXPORT.equals(resreq.getVisibility());
             if (reexport == true) {
-                Set<String> exportedPaths = new HashSet<String>();
-                for (Capability auxcap : exporter.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
-                    XCapability xcap = (XCapability) auxcap;
-                    XPackageCapability packcap = xcap.adapt(XPackageCapability.class);
-                    String path = packcap.getPackageName().replace('.', '/');
-                    if (importedPaths.contains(path) == false)
-                        exportedPaths.add(path);
-                }
-                PathFilter exportedPathsFilter = PathFilters.in(exportedPaths);
-                holder.setImportFilter(exportedPathsFilter);
-                holder.setExportFilter(exportedPathsFilter);
+                holder.addReexportPaths(requiredPaths);
             }
         }
     }
 
+    // The wires of the revisions that the current resolve operation wires, their wirings are set after their modules
+    private static final ThreadLocal<Map<BundleRevision, List<BundleWire>>> resolveWires = new ThreadLocal<Map<BundleRevision, List<BundleWire>>>();
+
+    static void setResolveWires(Map<BundleRevision, List<BundleWire>> wires) {
+        if (wires != null)
+            resolveWires.set(wires);
+        else
+            resolveWires.remove();
+    }
+
+    // The paths of the packages that a bundle provides to the bundles that require it
+    private Set<String> getRequiredBundlePaths(XBundleRevision provider, Set<XBundleRevision> visited) {
+        Set<String> paths = new HashSet<String>();
+        if (visited.add(provider) == false)
+            return paths;
+
+        // The wiring also has the packages of the attached fragments. A provider that is wired by the same resolve
+        // operation has no wiring yet, it has the wires of that operation
+        BundleWiring wiring = provider.getWiring();
+        Map<BundleRevision, List<BundleWire>> pendingWires = resolveWires.get();
+        List<BundleWire> pending = wiring == null && pendingWires != null ? pendingWires.get(provider) : null;
+        List<? extends Capability> caps = wiring != null ? wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE) : null;
+        if (caps == null)
+            caps = provider.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE);
+        for (Capability auxcap : caps) {
+            XPackageCapability packcap = ((XCapability) auxcap).adapt(XPackageCapability.class);
+            if (packcap != null)
+                paths.add(packcap.getPackageName().replace('.', '/'));
+        }
+        List<BundleWire> wires = wiring != null ? wiring.getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE) : pending;
+        if (wires != null) {
+            for (BundleWire auxwire : wires) {
+                if (BundleNamespace.BUNDLE_NAMESPACE.equals(auxwire.getCapability().getNamespace()) == false)
+                    continue;
+                XIdentityRequirement auxreq = ((XRequirement) auxwire.getRequirement()).adapt(XIdentityRequirement.class);
+                if (auxreq != null && VISIBILITY_REEXPORT.equals(auxreq.getVisibility()))
+                    paths.addAll(getRequiredBundlePaths((XBundleRevision) auxwire.getProvider(), visited));
+            }
+        }
+        return paths;
+    }
+
+    /**
+     * The filter of the classes that the bundle exports: the include and exclude directives of an exported package
+     * apply to the classes of that package, given by their simple names
+     */
     private PathFilter getExportClassFilter(XBundleRevision hostRev) {
-        PathFilter includeFilter = null;
-        PathFilter excludeFilter = null;
+        final Map<String, List<Pattern>[]> packageFilters = new HashMap<String, List<Pattern>[]>();
         for (Capability auxcap : hostRev.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
             XCapability xcap = (XCapability) auxcap;
             XPackageCapability packcap = xcap.adapt(XPackageCapability.class);
             String includeDirective = packcap.getDirective(Constants.INCLUDE_DIRECTIVE);
-            if (includeDirective != null) {
-                String packageName = packcap.getPackageName();
-                String[] patterns = includeDirective.split(",");
-                List<PathFilter> includes = new ArrayList<PathFilter>();
-                for (String pattern : patterns) {
-                    includes.add(PathFilters.match(packageName + "." + pattern));
-                }
-                includeFilter = PathFilters.any(includes);
-            }
             String excludeDirective = packcap.getDirective(Constants.EXCLUDE_DIRECTIVE);
-            if (excludeDirective != null) {
-                String packageName = packcap.getPackageName();
-                String[] patterns = excludeDirective.split(",");
-                List<PathFilter> excludes = new ArrayList<PathFilter>();
-                for (String pattern : patterns) {
-                    excludes.add(PathFilters.match(packageName + "." + pattern));
-                }
-                excludeFilter = PathFilters.not(PathFilters.any(excludes));
+            if (includeDirective != null || excludeDirective != null) {
+                @SuppressWarnings("unchecked")
+                List<Pattern>[] filters = new List[] { getClassNamePatterns(includeDirective), getClassNamePatterns(excludeDirective) };
+                packageFilters.put(packcap.getPackageName(), filters);
             }
         }
 
         // Accept all classes for export if there is no filter specified
-        if (includeFilter == null && excludeFilter == null)
+        if (packageFilters.isEmpty())
             return PathFilters.acceptAll();
 
-        if (includeFilter == null)
-            includeFilter = PathFilters.acceptAll();
+        return new PathFilter() {
+            @Override
+            public boolean accept(String className) {
+                int index = className.lastIndexOf('.');
+                String packageName = index > 0 ? className.substring(0, index) : "";
+                List<Pattern>[] filters = packageFilters.get(packageName);
+                if (filters == null)
+                    return true;
+                String simpleName = className.substring(index + 1);
+                boolean included = filters[0] == null || matchesAny(filters[0], simpleName);
+                boolean excluded = filters[1] != null && matchesAny(filters[1], simpleName);
+                return included && !excluded;
+            }
 
-        if (excludeFilter == null)
-            excludeFilter = PathFilters.rejectAll();
+            @Override
+            public String toString() {
+                return "ExportClassFilter" + packageFilters.keySet();
+            }
+        };
+    }
 
-        return PathFilters.all(includeFilter, excludeFilter);
+    // The patterns of a comma separated list of class names with wildcards, null without a list
+    private static List<Pattern> getClassNamePatterns(String directive) {
+        if (directive == null)
+            return null;
+        List<Pattern> result = new ArrayList<Pattern>();
+        for (String name : directive.split(",")) {
+            List<String> parts = new ArrayList<String>();
+            for (String part : name.trim().split("\\*", -1))
+                parts.add(Pattern.quote(part));
+            result.add(Pattern.compile(String.join(".*", parts)));
+        }
+        return result;
+    }
+
+    private static boolean matchesAny(List<Pattern> patterns, String simpleName) {
+        for (Pattern pattern : patterns) {
+            if (pattern.matcher(simpleName).matches())
+                return true;
+        }
+        return false;
     }
 
     /**
@@ -584,6 +647,8 @@ public final class ModuleManagerImpl implements ModuleManager {
         private final ModuleIdentifier identifier;
         private DependencySpec dependencySpec;
         private Set<String> importPaths;
+        private Set<String> requiredPaths;
+        private Set<String> reexportPaths;
         private PathFilter importFilter;
         private PathFilter exportFilter;
         private boolean optional;
@@ -606,6 +671,22 @@ public final class ModuleManagerImpl implements ModuleManager {
 
         Set<String> getImportPaths() {
             return importPaths;
+        }
+
+        // The packages that are visible through Require-Bundle
+        void addRequiredPaths(Set<String> paths) {
+            assertNotCreated();
+            if (requiredPaths == null)
+                requiredPaths = new HashSet<String>();
+            requiredPaths.addAll(paths);
+        }
+
+        // The packages that a Require-Bundle with visibility:=reexport exports again
+        void addReexportPaths(Set<String> paths) {
+            assertNotCreated();
+            if (reexportPaths == null)
+                reexportPaths = new HashSet<String>();
+            reexportPaths.addAll(paths);
         }
 
         void setImportFilter(PathFilter importFilter) {
@@ -636,10 +717,21 @@ public final class ModuleManagerImpl implements ModuleManager {
                 // Re-exporting more makes the linking of the module walk every path of the dependency graph
                 if (importPaths != null)
                     exportedPaths.retainAll(importPaths);
+                if (reexportPaths != null)
+                    exportedPaths.addAll(reexportPaths);
                 exportFilter = exportedPaths.isEmpty() ? PathFilters.rejectAll() : PathFilters.in(exportedPaths);
             }
             if (importFilter == null) {
-                importFilter = (importPaths != null ? PathFilters.in(importPaths) : PathFilters.acceptAll());
+                if (requiredPaths != null) {
+                    Set<String> visiblePaths = new HashSet<String>(requiredPaths);
+                    if (importPaths != null)
+                        visiblePaths.addAll(importPaths);
+                    // Not a plain set filter: with one, jboss-modules links a cycle of required bundles differently and a
+                    // bundle would see the content of a required bundle that is not first in its Require-Bundle order
+                    importFilter = visiblePaths.isEmpty() ? PathFilters.rejectAll() : PathFilters.all(PathFilters.acceptAll(), PathFilters.in(visiblePaths));
+                } else {
+                    importFilter = (importPaths != null ? PathFilters.in(importPaths) : PathFilters.acceptAll());
+                }
             }
             Module frameworkModule = getFrameworkModule();
             boolean isFrameworkModule = frameworkModule.getIdentifier().equals(identifier);

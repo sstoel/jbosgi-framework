@@ -319,7 +319,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
         List<ServiceReference<?>> srefs = new ArrayList<ServiceReference<?>>();
         for (ServiceState<?> serviceState : rs)
-            srefs.add(serviceState.getReference());
+            srefs.add(ServiceStateImpl.getReferenceInternal(serviceState));
 
         return srefs.toArray(new ServiceReference[srefs.size()]);
     }
@@ -337,7 +337,7 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
         List<ServiceReference<?>> srefs = new ArrayList<ServiceReference<?>>();
         for (ServiceState<?> serviceState : servicesInUse)
-            srefs.add(serviceState.getReference());
+            srefs.add(ServiceStateImpl.getReferenceInternal(serviceState));
 
         return srefs.toArray(new ServiceReference[srefs.size()]);
     }
@@ -532,7 +532,13 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
         getBundleManager().updateBundle(this, input);
     }
 
-    abstract void updateInternal(InputStream input) throws BundleException;
+    /**
+     * Update the bundle under the locks of the update.
+     *
+     * @return true if the bundle was stopped for the update and must be started again: that start goes through the
+     *         bundle lifecycle, without the locks of the update
+     */
+    abstract boolean updateInternal(InputStream input) throws BundleException;
 
     @Override
     public void uninstall() throws BundleException {

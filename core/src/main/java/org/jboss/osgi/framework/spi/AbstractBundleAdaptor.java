@@ -60,6 +60,7 @@ import org.jboss.osgi.resolver.spi.AbstractElement;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.BundleEvent;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.Version;
@@ -267,31 +268,41 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
                 return;
             }
 
-            bundleState.set(Bundle.STARTING);
+            changeState(Bundle.STARTING, BundleEvent.STARTING);
 
-            // Load the {@link BundleActivator}
-            OSGiMetaData metadata = brev.getAttachment(IntegrationConstants.OSGI_METADATA_KEY);
-            String activatorName = metadata != null ? metadata.getBundleActivator() : null;
-            if (bundleActivator == null && activatorName != null) {
-                Object result = loadClass(activatorName).newInstance();
-                if (result instanceof BundleActivator) {
-                    bundleActivator = (BundleActivator) result;
-                } else {
-                    throw MESSAGES.invalidBundleActivator(activatorName);
+            try {
+                // Load the {@link BundleActivator}
+                OSGiMetaData metadata = brev.getAttachment(IntegrationConstants.OSGI_METADATA_KEY);
+                String activatorName = metadata != null ? metadata.getBundleActivator() : null;
+                if (bundleActivator == null && activatorName != null) {
+                    Object result = loadClass(activatorName).newInstance();
+                    if (result instanceof BundleActivator) {
+                        bundleActivator = (BundleActivator) result;
+                    } else {
+                        throw MESSAGES.invalidBundleActivator(activatorName);
+                    }
                 }
-            }
 
-            if (bundleActivator != null) {
-                bundleActivator.start(getBundleContext());
+                if (bundleActivator != null) {
+                    bundleActivator.start(getBundleContext());
+                }
+            } catch (Throwable th) {
+                // The bundle is stopped as on a failed start of the framework's bundles: its services, used services
+                // and listeners are released
+                changeState(Bundle.STOPPING, BundleEvent.STOPPING);
+                releaseModuleBundleContext();
+                changeState(Bundle.RESOLVED, BundleEvent.STOPPED);
+                throw th;
             }
 
             setPersistentlyStarted(true);
-            bundleState.set(Bundle.ACTIVE);
+            changeState(Bundle.ACTIVE, BundleEvent.STARTED);
             LOGGER.infoBundleStarted(this);
 
+        } catch (BundleException ex) {
+            throw ex;
         } catch (Throwable th) {
-            bundleState.set(Bundle.RESOLVED);
-            throw new BundleException(MESSAGES.cannotStartBundle(this), th);
+            throw new BundleException(MESSAGES.cannotStartBundle(this), BundleException.ACTIVATOR_ERROR, th);
         } finally {
             lockManager.unlockItems(lockContext);
         }
@@ -314,6 +325,7 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
             if ((options & Bundle.STOP_TRANSIENT) == 0)
                 setPersistentlyStarted(false);
 
+            changeState(Bundle.STOPPING, BundleEvent.STOPPING);
             try {
                 if (bundleActivator != null) {
                     bundleActivator.stop(getBundleContext());
@@ -322,12 +334,10 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
                 // Any services registered by this bundle must be unregistered.
                 // Any services used by this bundle must be released.
                 // Any listeners registered by this bundle must be removed
-                ModuleBundleContext context = getModuleBundleContext();
-                if (context != null)
-                    context.release();
+                // The bundle is stopped also when its activator failed
+                releaseModuleBundleContext();
+                changeState(Bundle.RESOLVED, BundleEvent.STOPPED);
             }
-
-            bundleState.set(Bundle.RESOLVED);
             LOGGER.infoBundleStopped(this);
 
         } catch (Throwable th) {
@@ -369,6 +379,31 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
 
             // The bundle context is no longer valid. It is closed outside the monitor: the close releases the services and
             // listeners of the bundle, which takes the monitors of services and listeners and calls out to their users
+            ModuleBundleContext closing;
+            synchronized (this) {
+                closing = bundleContext;
+            }
+            if (closing != null)
+                closing.close();
+            synchronized (this) {
+                bundleContext = null;
+                bundleState.set(Bundle.UNINSTALLED);
+            }
+        } finally {
+            lockManager.unlockItems(lockContext);
+        }
+    }
+
+    /**
+     * The module of the bundle goes away while other bundles are wired to it: the bundle is uninstalled, its revision
+     * stays removal pending (in use, not current) until the bundles that are wired to it are refreshed
+     */
+    public void uninstallRemovalPending() {
+        LockManager lockManager = getPluginService(IntegrationServices.LOCK_MANAGER_PLUGIN, LockManager.class);
+        FrameworkWiringLock wireLock = lockManager.getItemForType(FrameworkWiringLock.class);
+        LockContext lockContext = lockManager.lockItems(Method.RESOLVE, wireLock, this);
+        try {
+            getBundleRevision().getWiringSupport().makeUneffective();
             ModuleBundleContext closing;
             synchronized (this) {
                 closing = bundleContext;
@@ -520,6 +555,18 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
     }
 
     @SuppressWarnings("unchecked")
+    private void changeState(int state, int eventType) {
+        bundleState.set(state);
+        FrameworkEvents events = getPluginService(IntegrationServices.FRAMEWORK_EVENTS_PLUGIN, FrameworkEvents.class);
+        events.fireBundleEvent(this, eventType);
+    }
+
+    private void releaseModuleBundleContext() {
+        ModuleBundleContext context = getModuleBundleContext();
+        if (context != null)
+            context.release();
+    }
+
     private <T extends Object> T getPluginService(ServiceName serviceName, Class<T> pluginType) {
         ServiceContainer serviceContainer = bundleManager.getServiceContainer();
         ServiceController<T> service = (ServiceController<T>) serviceContainer.getRequiredService(serviceName);

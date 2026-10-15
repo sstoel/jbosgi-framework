@@ -32,6 +32,7 @@ import org.jboss.osgi.framework.spi.FrameworkModuleProvider;
 import org.jboss.osgi.framework.spi.IntegrationConstants;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleException;
+import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.Version;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleRevisions;
@@ -139,7 +140,7 @@ final class SystemBundleState extends AbstractBundleState<SystemBundleRevision> 
     @Override
     void stopWithOptions(int options) throws BundleException {
         // Returns immediately and shuts down the Framework on another thread
-        getBundleManager().shutdownManager(false);
+        getBundleManager().stopFramework(FrameworkEvent.STOPPED, null);
     }
 
     @Override
@@ -148,8 +149,9 @@ final class SystemBundleState extends AbstractBundleState<SystemBundleRevision> 
     }
 
     @Override
-    void updateInternal(InputStream input) throws BundleException {
+    boolean updateInternal(InputStream input) throws BundleException {
         // [TODO] Returns immediately, then stops and restarts the Framework on another thread.
+        return false;
     }
 
     @Override

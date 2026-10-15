@@ -29,6 +29,7 @@ import java.security.AccessController;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Dictionary;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -135,18 +136,17 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         synchronized (bundleListeners) {
             List<BundleListenerRegistration> registrations = bundleListeners.get(bundle);
             if (registrations != null) {
-                if (registrations.size() > 1) {
-                    Iterator<BundleListenerRegistration> iterator = registrations.iterator();
-                    while(iterator.hasNext()) {
-                        BundleListenerRegistration registration = iterator.next();
-                        if (registration.getListener() == listener) {
-                            iterator.remove();
-                            break;
-                        }
+                Iterator<BundleListenerRegistration> iterator = registrations.iterator();
+                while(iterator.hasNext()) {
+                    BundleListenerRegistration registration = iterator.next();
+                    if (registration.getListener() == listener) {
+                        iterator.remove();
+                        break;
                     }
-                } else {
-                    removeBundleListeners(bundle);
                 }
+                // A listener that was not added changes nothing
+                if (registrations.isEmpty())
+                    removeBundleListeners(bundle);
             }
         }
     }
@@ -185,9 +185,9 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         synchronized (frameworkListeners) {
             List<FrameworkListener> listeners = frameworkListeners.get(bundleState);
             if (listeners != null) {
-                if (listeners.size() > 1)
-                    listeners.remove(listener);
-                else
+                // A listener that was not added changes nothing
+                listeners.remove(listener);
+                if (listeners.isEmpty())
                     removeFrameworkListeners(bundleState);
             }
         }
@@ -244,11 +244,14 @@ final class FrameworkEventsImpl implements FrameworkEvents {
     @Override
     public Collection<ListenerInfo> getServiceListenerInfos(final XBundle bundleState) {
         Collection<ListenerInfo> listeners = new ArrayList<ListenerInfo>();
-        for (Entry<XBundle, List<ServiceListenerRegistration>> entry : serviceListeners.entrySet()) {
-            if (bundleState == null || bundleState.equals(entry.getKey())) {
-                for (ServiceListenerRegistration aux : entry.getValue()) {
-                    ListenerInfo info = aux.getListenerInfo();
-                    listeners.add(info);
+        // The lists are modified under this monitor while listeners are added and removed
+        synchronized (serviceListeners) {
+            for (Entry<XBundle, List<ServiceListenerRegistration>> entry : serviceListeners.entrySet()) {
+                if (bundleState == null || bundleState.equals(entry.getKey())) {
+                    for (ServiceListenerRegistration aux : entry.getValue()) {
+                        ListenerInfo info = aux.getListenerInfo();
+                        listeners.add(info);
+                    }
                 }
             }
         }
@@ -598,8 +601,13 @@ final class FrameworkEventsImpl implements FrameworkEvents {
             listeners = new RemoveOnlyMap<BundleContext, Collection<ListenerInfo>>(listeners);
         }
 
+        // The properties of a modification are those of its event, not the current ones of the service
+        ServiceModification modification = type == ServiceEvent.MODIFIED ? ServiceModification.delivering.get() : null;
+        Dictionary<String, ?> currentProperties = modification != null ? modification.current : null;
+        Dictionary<String, ?> previousProperties = modification != null ? modification.previous : serviceState.getPreviousProperties();
+
         // Construct the ServiceEvent
-        ServiceEvent event = new ServiceEventImpl(type, serviceState);
+        final ServiceEvent event = new ServiceEventImpl(type, serviceState);
         String typeName = ConstantsHelper.serviceEvent(event.getType());
         LOGGER.tracef("Service %s: %s", typeName, serviceState);
 
@@ -646,7 +654,8 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                     String filterstr = info.getFilter();
                     ServiceListener listener = listenerReg.getListener();
                     // The filter also applies to an AllServiceListener, which is only exempt from the class space check
-                    if (listener instanceof UnfilteredServiceListener || listenerReg.filter.match(serviceState)) {
+                    boolean matches = currentProperties != null ? listenerReg.filter.match(currentProperties) : listenerReg.filter.match(serviceState);
+                    if (listener instanceof UnfilteredServiceListener || matches) {
                         listener.serviceChanged(event);
                     }
 
@@ -655,9 +664,9 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                     // the filter matched the service properties prior to the modification but the filter does
                     // not match the modified service properties.
                     else if (filterstr != null && ServiceEvent.MODIFIED == event.getType()) {
-                        if (listenerReg.filter.match(serviceState.getPreviousProperties())) {
-                            event = new ServiceEventImpl(ServiceEvent.MODIFIED_ENDMATCH, serviceState);
-                            listener.serviceChanged(event);
+                        // Only this listener gets the MODIFIED_ENDMATCH event, the others are handled with the MODIFIED event
+                        if (previousProperties != null && listenerReg.filter.match(previousProperties)) {
+                            listener.serviceChanged(new ServiceEventImpl(ServiceEvent.MODIFIED_ENDMATCH, serviceState));
                         }
                     }
                 } catch (Throwable th) {
@@ -940,12 +949,41 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         }
     }
 
+    /**
+     * The properties before and after a modification of the service properties, delivered with the MODIFIED event of
+     * the modification in the thread that modifies them
+     */
+    static final class ServiceModification {
+
+        private static final ThreadLocal<ServiceModification> delivering = new ThreadLocal<ServiceModification>();
+        private final Dictionary<String, ?> previous;
+        private final Dictionary<String, ?> current;
+
+        private ServiceModification(Dictionary<String, ?> previous, Dictionary<String, ?> current) {
+            this.previous = previous;
+            this.current = current;
+        }
+
+        static void deliver(Dictionary<String, ?> previous, Dictionary<String, ?> current, Runnable delivery) {
+            ServiceModification outer = delivering.get();
+            delivering.set(new ServiceModification(previous, current));
+            try {
+                delivery.run();
+            } finally {
+                if (outer != null)
+                    delivering.set(outer);
+                else
+                    delivering.remove();
+            }
+        }
+    }
+
     static class ServiceEventImpl extends ServiceEvent {
 
         private static final long serialVersionUID = 62018288275708239L;
 
         public ServiceEventImpl(int type, ServiceState<?> serviceState) {
-            super(type, serviceState.getReference());
+            super(type, ServiceStateImpl.getReferenceInternal(serviceState));
         }
 
         @Override

@@ -88,6 +88,7 @@ import org.jboss.osgi.resolver.XEnvironment;
 import org.jboss.osgi.resolver.XResolveContext;
 import org.jboss.osgi.resolver.XResolver;
 import org.jboss.osgi.resolver.XResource;
+import org.jboss.osgi.resolver.spi.RemoveOnlyCollection;
 import org.jboss.osgi.vfs.VFSUtils;
 import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.Bundle;
@@ -162,6 +163,8 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     private final FrameworkBuilder frameworkBuilder;
     private final ShutdownContainer shutdownContainer;
     private final Set<ExecutorService> executorServices = new HashSet<ExecutorService>();
+    private final Map<String, InstallLock> installLocks = new HashMap<String, InstallLock>();
+    private Thread stopThread;
     private final Map<String, Object> properties = new HashMap<String, Object>();
     private final AtomicInteger managerState = new AtomicInteger(Bundle.INSTALLED);
     private final AtomicBoolean managerStopped = new AtomicBoolean();
@@ -498,6 +501,32 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         return brev;
     }
 
+    /**
+     * The lock that serializes the installs of a location, released with {@link #releaseInstallLock(String, Object)}
+     */
+    Object acquireInstallLock(String location) {
+        synchronized (installLocks) {
+            InstallLock lock = installLocks.get(location);
+            if (lock == null) {
+                lock = new InstallLock();
+                installLocks.put(location, lock);
+            }
+            lock.users++;
+            return lock;
+        }
+    }
+
+    void releaseInstallLock(String location, Object lock) {
+        synchronized (installLocks) {
+            if (--((InstallLock) lock).users == 0)
+                installLocks.remove(location);
+        }
+    }
+
+    private static final class InstallLock {
+        int users;
+    }
+
     @Override
     public XBundleRevision installBundleRevision(BundleContext context, Deployment deployment, ServiceTarget serviceTarget) throws BundleException {
         if (context == null)
@@ -659,13 +688,25 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         LockManager lockManager = getFrameworkState().getLockManager();
         LockableItem[] items = getLockableItems(lockManager, Method.UPDATE, bundle);
         LockContext lockContext = lockManager.lockItems(Method.UPDATE, items);
+        boolean restart;
         try {
-            AbstractBundleState.assertBundleState(bundle).updateInternal(input);
+            restart = AbstractBundleState.assertBundleState(bundle).updateInternal(input);
         } catch (BundleException ex) {
             LOGGER.debugf(ex, "Cannot update bundle: %s", bundle);
             throw ex;
         } finally {
             lockManager.unlockItems(lockContext);
+        }
+
+        // The updated bundle is started like with Bundle.start, without the locks of the update: the bundle lifecycle
+        // of an integration may activate the deployment of the new revision in other threads, which take the locks of
+        // the start. If Bundle.start throws an exception, a Framework event of type FrameworkEvent.ERROR is fired
+        if (restart) {
+            try {
+                startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
+            } catch (BundleException ex) {
+                getFrameworkState().getFrameworkEvents().fireFrameworkEvent(bundle, FrameworkEvent.ERROR, ex);
+            }
         }
     }
 
@@ -750,8 +791,11 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             case UPDATE:
             case REFRESH:
             case UNINSTALL:
-            case STOP:
                 items = new LockableItem[] { wireLock, (LockableItem) bundle };
+                break;
+            case STOP:
+                // A stop changes no wiring, the activator is not called under the framework wiring lock
+                items = new LockableItem[] { (LockableItem) bundle };
                 break;
             case START:
                 items = new LockableItem[] { bundle.isResolved() ? (LockableItem) bundle : wireLock, (LockableItem) bundle };
@@ -771,12 +815,9 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
         Set<Bundle> candidates = new HashSet<Bundle>();
         if (symbolicName != null) {
-            VersionRange versionRange = null;
-            if (!Version.emptyVersion.equals(version)) {
-                versionRange = new VersionRange("[" + version + "," + version + "]");
-            }
-            for (XBundle aux : getBundles(symbolicName, versionRange)) {
-                if (aux != targetBundle && aux.getState() != Bundle.UNINSTALLED) {
+            // Only bundles with the exact version collide, also for the version 0.0.0
+            for (XBundle aux : getBundles(symbolicName, null)) {
+                if (aux != targetBundle && aux.getState() != Bundle.UNINSTALLED && version.equals(aux.getVersion())) {
                     candidates.add(aux);
                 }
             }
@@ -792,9 +833,11 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             } catch (InvalidSyntaxException ex) {
                 // ignore
             }
+            // The hooks can only remove candidates
+            Collection<Bundle> shrinkable = new RemoveOnlyCollection<Bundle>(candidates);
             for (ServiceReference<CollisionHook> sref : srefs) {
                 CollisionHook hook = syscontext.getService(sref);
-                hook.filterCollisions(policy, targetBundle, candidates);
+                hook.filterCollisions(policy, targetBundle, shrinkable);
             }
         }
         if (!candidates.isEmpty()) {
@@ -952,6 +995,29 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     FrameworkExtensions getFrameworkExtensions() {
         return frameworkExtensions;
+    }
+
+    /**
+     * Stop the framework on another thread and return immediately, as Framework.stop and update do. The given task
+     * runs on that thread after the stop, a stop that is already in progress is not started again.
+     */
+    void stopFramework(final int stoppedEventType, final Runnable afterStop) {
+        int state = getManagerState();
+        if (state != Bundle.STARTING && state != Bundle.ACTIVE)
+            return;
+        synchronized (this) {
+            if (stopThread != null && stopThread.isAlive())
+                return;
+            stopThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    shutdownManager(stoppedEventType);
+                    if (afterStop != null)
+                        afterStop.run();
+                }
+            }, "Framework stop thread");
+            stopThread.start();
+        }
     }
 
     void shutdownManager(boolean stopForUpdate) {

@@ -80,7 +80,7 @@ public final class StartLevelManagerImpl implements StartLevelManager {
     }
 
     @Override
-    public synchronized void setFrameworkStartLevel(final int level, FrameworkListener... listeners) {
+    public void setFrameworkStartLevel(final int level, FrameworkListener... listeners) {
         setFrameworkStartLevelInternal(level, immediateExecution.get(), listeners);
     }
 
@@ -94,40 +94,30 @@ public final class StartLevelManagerImpl implements StartLevelManager {
         setFrameworkStartLevelInternal(0, true, listeners);
     }
 
-    private synchronized void setFrameworkStartLevelInternal(final int level, final boolean synchronous, final FrameworkListener... listeners) {
+    /**
+     * The request does not wait for a start level change that is in progress. The requests are processed in their order,
+     * each one compares its level with the active start level when it is processed.
+     */
+    private void setFrameworkStartLevelInternal(final int level, final boolean synchronous, final FrameworkListener... listeners) {
 
         final XBundle sysbundle = bundleManager.getSystemBundle();
-
-        // In case of equality just fire the event
-        if (level == getFrameworkStartLevel()) {
-            events.fireFrameworkEvent(sysbundle, FrameworkEvent.STARTLEVEL_CHANGED, null, listeners);
-            return;
-        }
-
-        if (level > getFrameworkStartLevel()) {
-            Runnable runner = new Runnable() {
-                @Override
-                public void run() {
-                    LOGGER.infoIncreasingStartLevel(getFrameworkStartLevel(), level);
-                    increaseFrameworkStartLevel(level);
-                    events.fireFrameworkEvent(sysbundle, FrameworkEvent.STARTLEVEL_CHANGED, null, listeners);
+        Runnable runner = new Runnable() {
+            @Override
+            public void run() {
+                synchronized (StartLevelManagerImpl.this) {
+                    int activeLevel = getFrameworkStartLevel();
+                    if (level > activeLevel) {
+                        LOGGER.infoIncreasingStartLevel(activeLevel, level);
+                        increaseFrameworkStartLevel(level);
+                    } else if (level < activeLevel) {
+                        LOGGER.infoDecreasingStartLevel(activeLevel, level);
+                        decreaseFrameworkStartLevel(level);
+                    }
                 }
-            };
-
-            executeTask(runner, synchronous);
-
-        } else if (level < getFrameworkStartLevel()) {
-            Runnable runner = new Runnable() {
-                @Override
-                public void run() {
-                    LOGGER.infoDecreasingStartLevel(getFrameworkStartLevel(), level);
-                    decreaseFrameworkStartLevel(level);
-                    events.fireFrameworkEvent(sysbundle, FrameworkEvent.STARTLEVEL_CHANGED, null, listeners);
-                }
-            };
-
-            executeTask(runner, synchronous);
-        }
+                events.fireFrameworkEvent(sysbundle, FrameworkEvent.STARTLEVEL_CHANGED, null, listeners);
+            }
+        };
+        executeTask(runner, synchronous);
     }
 
     /**
@@ -353,6 +343,8 @@ public final class StartLevelManagerImpl implements StartLevelManager {
                 UserBundleState userBundle = (UserBundleState)bundle;
                 StorageState storageState = userBundle.getStorageState();
                 level = storageState != null ? storageState.getStartLevel() : getInitialBundleStartLevel();
+                // The autostart setting of a bundle that is restored from the storage
+                started = storageState != null && storageState.isPersistentlyStarted();
             }
         }
 

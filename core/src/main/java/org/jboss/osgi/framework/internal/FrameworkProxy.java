@@ -67,6 +67,8 @@ final class FrameworkProxy implements Framework {
 
     private final FrameworkBuilder frameworkBuilder;
     private BundleManagerPlugin bundleManager;
+    // The thread that stops and restarts the framework for Framework.update
+    private volatile Thread updateThread;
     private boolean firstInit;
     private boolean connectorInitialized;
 
@@ -129,6 +131,7 @@ final class FrameworkProxy implements Framework {
 
     @Override
     public void init(final FrameworkListener... frameworkListeners) throws BundleException {
+        awaitUpdate();
 
         // This method does nothing if called when this Framework is in the STARTING, ACTIVE or STOPPING state
         int state = getState();
@@ -227,6 +230,7 @@ final class FrameworkProxy implements Framework {
      */
     @Override
     public void start(int options) throws BundleException {
+        awaitUpdate();
 
         // If this Framework is not in the STARTING state, initialize this Framework
         if (getState() != Bundle.STARTING)
@@ -274,8 +278,11 @@ final class FrameworkProxy implements Framework {
      */
     @Override
     public void stop(int options) throws BundleException {
+        // Returns immediately, the framework stops on another thread. A framework that is updated is stopped
+        // after it was started again.
+        awaitUpdate();
         if (bundleManager != null)
-            bundleManager.shutdownManager(false);
+            bundleManager.stopFramework(FrameworkEvent.STOPPED, null);
     }
 
     /**
@@ -313,13 +320,15 @@ final class FrameworkProxy implements Framework {
 
         LOGGER.debugf("update framework");
 
+        // Returns immediately, the framework stops and is started again on another thread
         final int targetState = getState();
+        final BundleManagerPlugin stoppingManager = bundleManager;
         Runnable cmd = new Runnable() {
 
             @Override
             public void run() {
                 try {
-                    bundleManager.shutdownManager(true);
+                    stoppingManager.shutdownManager(true);
                     if (targetState == Bundle.STARTING) {
                         init();
                     }
@@ -328,10 +337,29 @@ final class FrameworkProxy implements Framework {
                     }
                 } catch (Exception ex) {
                     LOGGER.errorCannotUpdateFramework(ex);
+                } finally {
+                    updateThread = null;
                 }
             }
         };
-        new Thread(cmd, "Framework update thread").run();
+        synchronized (this) {
+            if (updateThread != null)
+                return;
+            updateThread = new Thread(cmd, "Framework update thread");
+            updateThread.start();
+        }
+    }
+
+    // Wait until an update of the framework that is in progress started the framework again
+    private void awaitUpdate() {
+        Thread thread = updateThread;
+        if (thread != null && thread != Thread.currentThread()) {
+            try {
+                thread.join(60000);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     @Override

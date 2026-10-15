@@ -29,6 +29,8 @@ import java.io.IOException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Vector;
@@ -216,12 +218,39 @@ final class RevisionContent implements EntriesProvider {
         return result.elements();
     }
 
+    /**
+     * The path with its "." and ".." segments resolved, null if it leaves the root
+     */
+    static String normalizePath(String path) {
+        Deque<String> segments = new ArrayDeque<String>();
+        for (String segment : path.split("/")) {
+            if (segment.isEmpty() || segment.equals("."))
+                continue;
+            if (segment.equals("..")) {
+                if (segments.isEmpty())
+                    return null;
+                segments.removeLast();
+            } else {
+                segments.addLast(segment);
+            }
+        }
+        StringBuilder result = new StringBuilder();
+        for (String segment : segments)
+            result.append('/').append(segment);
+        if (path.endsWith("/") && result.length() > 0)
+            result.append('/');
+        return result.length() > 0 ? result.toString() : "/";
+    }
+
     URL getBundleURL(final VirtualFile child) throws IOException {
         final String orgPath = child.getPathName();
         URLStreamHandler streamHandler = new URLStreamHandler() {
             @Override
             protected URLConnection openConnection(URL url) throws IOException {
-                String path = url.getPath();
+                String path = normalizePath(url.getPath());
+                // A path that leaves the root of the content, e.g. through "..", is not an entry of the bundle
+                if (path == null)
+                    throw new FileNotFoundException(url.toExternalForm());
                 VirtualFile real = (orgPath.equals(path) ? child : virtualFile.getChild(path));
                 if (real == null)
                     throw new FileNotFoundException(url.toExternalForm());

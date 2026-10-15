@@ -165,6 +165,20 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
     private Bundle installBundleInternal(String location, InputStream input) throws BundleException {
         asertNotDestroyed();
 
+        // The installs of a location are serialized: the check for an existing bundle and the install are atomic
+        BundleManagerPlugin bundleManager = getBundleManager();
+        Object installLock = bundleManager.acquireInstallLock(location);
+        try {
+            synchronized (installLock) {
+                return installBundleLocked(location, input);
+            }
+        } finally {
+            bundleManager.releaseInstallLock(location, installLock);
+        }
+    }
+
+    private Bundle installBundleLocked(String location, InputStream input) throws BundleException {
+
         // When an existing bundle is already installed at a given location, the find method is called to determine if the
         // context performing the install operation is able to find the bundle. If the context cannot find the existing bundle
         // then the install operation must fail with a BundleException.REJECTED_BY_HOOK exception
@@ -429,7 +443,7 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
 
         List<ServiceReference<?>> result = new ArrayList<ServiceReference<?>>();
         for (ServiceState<?> serviceState : srefs)
-            result.add(serviceState.getReference());
+            result.add(ServiceStateImpl.getReferenceInternal(serviceState));
 
         return result.toArray(new ServiceReference[result.size()]);
     }
@@ -444,7 +458,7 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
 
         List<ServiceReference<S>> result = new ArrayList<ServiceReference<S>>();
         for (ServiceState<?> serviceState : srefs)
-            result.add((ServiceReference<S>) serviceState.getReference());
+            result.add((ServiceReference<S>) ServiceStateImpl.getReferenceInternal(serviceState));
 
         return Collections.unmodifiableList(result);
     }
@@ -459,7 +473,7 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
 
         List<ServiceReference<?>> result = new ArrayList<ServiceReference<?>>();
         for (ServiceState<?> serviceState : srefs)
-            result.add(serviceState.getReference());
+            result.add(ServiceStateImpl.getReferenceInternal(serviceState));
 
         return result.toArray(new ServiceReference[result.size()]);
     }

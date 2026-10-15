@@ -27,10 +27,13 @@ import java.lang.reflect.Method;
 import org.jboss.modules.ClassSpec;
 import org.jboss.modules.ModuleClassLoader;
 import org.jboss.modules.ModuleClassLoaderFactory;
+import org.jboss.modules.ModuleIdentifier;
 import org.jboss.modules.filter.PathFilter;
 import org.jboss.osgi.framework.FrameworkLogger;
 import org.jboss.osgi.framework.internal.WeavingContext.ContextClass;
 import org.jboss.osgi.framework.spi.BundleReferenceClassLoader;
+import org.jboss.osgi.framework.spi.ModuleManager;
+import org.jboss.osgi.resolver.XBundleRevision;
 
 /**
  * A {@link ModuleClassLoader} that holds a reference to the underlying bundle.
@@ -60,6 +63,7 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
     }
     
     private final PathFilter lazyFilter;
+    private volatile XBundleRevision definingRevision;
 
     private HostBundleClassLoader(Configuration configuration, UserBundleState bundleState, PathFilter lazyFilter) {
         super(configuration, bundleState);
@@ -72,7 +76,7 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
         if (className.startsWith("java."))
             return null;
 
-        WeavingContext context = WeavingContext.create(getBundleState());
+        WeavingContext context = WeavingContext.create(getBundleState(), getDefiningRevision());
         try {
             return super.loadClassLocal(className, resolve);
         } catch (LinkageError err) {
@@ -86,12 +90,33 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
         }
     }
 
+    // The revision of the bundle whose module this class loader belongs to
+    private XBundleRevision getDefiningRevision() {
+        XBundleRevision result = definingRevision;
+        if (result == null) {
+            ModuleManager moduleManager = getBundleState().getFrameworkState().getModuleManager();
+            ModuleIdentifier identifier = getModule().getIdentifier();
+            for (XBundleRevision brev : getBundleState().getAllBundleRevisions()) {
+                if (identifier.equals(moduleManager.getModuleIdentifier(brev))) {
+                    definingRevision = result = brev;
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
     @Override
     protected void preDefine(ClassSpec classSpec, String className) {
         if (getBundleState().awaitLazyActivation()) {
             String path = className.substring(0, className.lastIndexOf('.')).replace('.', '/');
             if (lazyFilter.accept(path)) {
                 LazyActivationTracker.preDefineClass(getBundleState(), className);
+            }
+        } else if (className.lastIndexOf('.') > 0) {
+            String path = className.substring(0, className.lastIndexOf('.')).replace('.', '/');
+            if (lazyFilter.accept(path)) {
+                getBundleState().lazyClassLoaded();
             }
         }
     }

@@ -134,6 +134,10 @@ public class BundleActivationTestCase extends OSGiFrameworkTest {
         try {
             assertBundleState(Bundle.INSTALLED, providerBundle.getState());
 
+            // Only a bundle that was started with its declared activation policy is activated by a class load (4.4.6.2)
+            providerBundle.start(Bundle.START_ACTIVATION_POLICY);
+            assertBundleState(Bundle.STARTING, providerBundle.getState());
+
             Class<?> serviceClass = providerBundle.loadClass(SimpleService.class.getName());
             assertNotNull("Service class not null", serviceClass);
 
@@ -154,6 +158,10 @@ public class BundleActivationTestCase extends OSGiFrameworkTest {
         Bundle providerBundle = installBundle(getLazyServiceProviderWithInclude());
         try {
             assertBundleState(Bundle.INSTALLED, providerBundle.getState());
+
+            // Only a bundle that was started with its declared activation policy is activated by a class load (4.4.6.2)
+            providerBundle.start(Bundle.START_ACTIVATION_POLICY);
+            assertBundleState(Bundle.STARTING, providerBundle.getState());
 
             Class<?> serviceClass = providerBundle.loadClass(SimpleService.class.getName());
             assertNotNull("Service class not null", serviceClass);
@@ -176,10 +184,14 @@ public class BundleActivationTestCase extends OSGiFrameworkTest {
         try {
             assertBundleState(Bundle.INSTALLED, providerBundle.getState());
 
+            // Only a bundle that was started with its declared activation policy is activated by a class load (4.4.6.2)
+            providerBundle.start(Bundle.START_ACTIVATION_POLICY);
+            assertBundleState(Bundle.STARTING, providerBundle.getState());
+
             Class<?> serviceClass = providerBundle.loadClass(BeanB.class.getName());
             assertNotNull("Service class not null", serviceClass);
 
-            assertBundleState(Bundle.RESOLVED, providerBundle.getState());
+            assertBundleState(Bundle.STARTING, providerBundle.getState());
 
             ServiceReference<?> sref = context.getServiceReference(SimpleService.class.getName());
             assertNull("Service null", sref);
@@ -204,6 +216,10 @@ public class BundleActivationTestCase extends OSGiFrameworkTest {
         Bundle providerBundle = installBundle(getLazyServiceProvider());
         try {
             assertBundleState(Bundle.INSTALLED, providerBundle.getState());
+
+            // Only a bundle that was started with its declared activation policy is activated by a class load (4.4.6.2)
+            providerBundle.start(Bundle.START_ACTIVATION_POLICY);
+            assertBundleState(Bundle.STARTING, providerBundle.getState());
 
             Bundle consumerBundle = installBundle(getLazyServiceConsumer());
             try {

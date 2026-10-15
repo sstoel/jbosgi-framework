@@ -30,7 +30,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,6 +47,7 @@ import org.jboss.osgi.framework.spi.URLResource;
 import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.jboss.osgi.resolver.XCapability;
+import org.jboss.osgi.resolver.XIdentityRequirement;
 import org.jboss.osgi.resolver.XPackageCapability;
 import org.jboss.osgi.resolver.XPackageRequirement;
 import org.jboss.osgi.resolver.XRequirement;
@@ -55,13 +55,15 @@ import org.jboss.osgi.resolver.XWiring;
 import org.jboss.osgi.resolver.spi.AbstractBundleWire;
 import org.jboss.osgi.resolver.spi.RemoveOnlyCollection;
 import org.jboss.osgi.resolver.spi.ResolverHookProcessor;
-import org.jboss.osgi.vfs.VFSUtils;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.Constants;
+import org.osgi.framework.namespace.BundleNamespace;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleRequirement;
 import org.osgi.framework.wiring.BundleRevision;
+import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.resource.Capability;
 import org.osgi.resource.Requirement;
@@ -131,7 +133,7 @@ final class FallbackLoader implements LocalLoader {
         try {
             lockFallbackLoader();
 
-            List<XPackageRequirement> matchingPatterns = findMatchingPatterns(className);
+            List<XPackageRequirement> matchingPatterns = findMatchingPatterns(context.packageName);
             if (!fallbackEnabled.get() || matchingPatterns.isEmpty())
                 return null;
 
@@ -184,19 +186,19 @@ final class FallbackLoader implements LocalLoader {
 
     @Override
     public Package loadPackageLocal(String name) {
-        throw new UnsupportedOperationException();
+        // The packages of dynamic imports are those of the exporters
+        return null;
     }
 
     @Override
     public List<Resource> loadResourceLocal(String resName) {
+        if (resName.startsWith("/"))
+            resName = resName.substring(1);
         DynamicLoadContext context = new DynamicLoadContext(resName);
         try {
             lockFallbackLoader();
 
-            if (resName.startsWith("/"))
-                resName = resName.substring(1);
-
-            List<XPackageRequirement> matchingPatterns = findMatchingPatterns(resName);
+            List<XPackageRequirement> matchingPatterns = findMatchingPatterns(context.packageName);
             if (!fallbackEnabled.get() || matchingPatterns.isEmpty())
                 return Collections.emptyList();
 
@@ -207,7 +209,10 @@ final class FallbackLoader implements LocalLoader {
                 return Collections.emptyList();
             }
 
-            URL resURL = brev.getEntry(resName);
+            // The resource of a package is loaded by the exporter, also from its fragments and its Bundle-ClassPath. A
+            // resource directory that is not a package is an entry of the bundle that has it
+            ModuleClassLoader exporterLoader = context.capability != null ? brev.getModuleClassLoader() : null;
+            URL resURL = exporterLoader != null ? exporterLoader.getResource(resName) : brev.getEntry(resName);
             if (resURL == null) {
                 LOGGER.warnf("Fallback loader cannot load resource [%s] from module: %s", resName, brev);
                 return Collections.emptyList();
@@ -249,7 +254,12 @@ final class FallbackLoader implements LocalLoader {
                 mapping.put(pathName, recursiveDepth = new AtomicInteger());
 
             if (recursiveDepth.incrementAndGet() == 1) {
-                findInResolvedRevisions(context, matchingPatterns);
+                // A resource in a directory that is not a package is found by its content, the capabilities of the
+                // module bundles name every path of a module
+                findResourceDirectory(context);
+                if (context.targetRevision == null) {
+                    findInResolvedRevisions(context, matchingPatterns);
+                }
                 if (context.targetRevision == null) {
                     findInUnresolvedRevisions(context, matchingPatterns);
                     if (context.targetRevision == null) {
@@ -268,41 +278,75 @@ final class FallbackLoader implements LocalLoader {
         }
     }
 
-    private List<XPackageRequirement> findMatchingPatterns(String resName) {
-
-        List<XPackageRequirement> dynamicRequirements = getDynamicPackageRequirements(hostRev);
+    /**
+     * The dynamic package requirements that match the package of a class or resource. Dynamic imports are not used
+     * for packages that the bundle exports, or obtains with Import-Package or Require-Bundle (3.9.4 step 6).
+     */
+    private List<XPackageRequirement> findMatchingPatterns(String packageName) {
+        if (packageName == null)
+            return Collections.emptyList();
 
         // Dynamic imports may not be used when the package is exported
-        String pathName = VFSUtils.getPathFromClassName(resName);
-        List<XPackageCapability> packageCapabilities = getPackageCapabilities(hostRev);
-        for (XPackageCapability packageCap : packageCapabilities) {
-            String packagePath = packageCap.getPackageName().replace('.', '/');
-            if (pathName.equals(packagePath))
+        for (XPackageCapability packageCap : getPackageCapabilities(hostRev)) {
+            if (packageName.equals(packageCap.getPackageName()))
                 return Collections.emptyList();
         }
 
+        // Nor when the package is visible through a required bundle
+        if (getRequiredBundlePackages().contains(packageName))
+            return Collections.emptyList();
+
         List<XPackageRequirement> foundMatch = new ArrayList<XPackageRequirement>();
-        for (XPackageRequirement dynreq : dynamicRequirements) {
-
-            final String pattern = dynreq.getPackageName();
-            if (pattern.equals("*")) {
+        for (XPackageRequirement dynreq : getDynamicPackageRequirements(hostRev)) {
+            if (matchesPattern(dynreq.getPackageName(), packageName)) {
                 foundMatch.add(dynreq);
-                continue;
-            }
-
-            String patternPath = getPatternPath(pattern);
-            if (pathName.startsWith(patternPath)) {
-                foundMatch.add(dynreq);
-                continue;
             }
         }
 
         if (foundMatch.isEmpty() == false)
-            LOGGER.tracef("Found match for path [%s] with Dynamic-ImportPackage pattern: %s", resName, foundMatch);
+            LOGGER.tracef("Found match for package [%s] with Dynamic-ImportPackage pattern: %s", packageName, foundMatch);
         else
-            LOGGER.tracef("Class [%s] does not match Dynamic-ImportPackage patterns", resName);
+            LOGGER.tracef("Package [%s] does not match Dynamic-ImportPackage patterns", packageName);
 
         return foundMatch;
+    }
+
+    // "*" matches every package, "a.b.*" the packages below a.b, "a.b" only the package a.b
+    static boolean matchesPattern(String pattern, String packageName) {
+        if (pattern.equals("*"))
+            return true;
+        if (pattern.endsWith(".*"))
+            return packageName.startsWith(pattern.substring(0, pattern.length() - 1));
+        return pattern.equals(packageName);
+    }
+
+    // The packages of the bundles that the host requires, also those that these re-export
+    private Set<String> getRequiredBundlePackages() {
+        Set<String> result = new HashSet<String>();
+        BundleWiring wiring = hostRev.getWiring();
+        if (wiring != null)
+            addRequiredBundlePackages(wiring, result, new HashSet<BundleWiring>(), true);
+        return result;
+    }
+
+    private void addRequiredBundlePackages(BundleWiring wiring, Set<String> result, Set<BundleWiring> visited, boolean requirer) {
+        if (visited.add(wiring) == false)
+            return;
+        List<BundleWire> wires = wiring.getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE);
+        if (wires == null)
+            return;
+        for (BundleWire wire : wires) {
+            XIdentityRequirement idreq = ((XRequirement) wire.getRequirement()).adapt(XIdentityRequirement.class);
+            boolean reexport = idreq != null && Constants.VISIBILITY_REEXPORT.equals(idreq.getVisibility());
+            if (requirer || reexport) {
+                BundleWiring providerWiring = wire.getProviderWiring();
+                if (providerWiring != null) {
+                    for (XPackageCapability pcap : getPackageCapabilities(wire.getProvider()))
+                        result.add(pcap.getPackageName());
+                    addRequiredBundlePackages(providerWiring, result, visited, false);
+                }
+            }
+        }
     }
 
     private void findInResolvedRevisions(DynamicLoadContext context, List<XPackageRequirement> matchingPatterns) {
@@ -323,24 +367,30 @@ final class FallbackLoader implements LocalLoader {
                     XBundleRevision brev = bundle.getBundleRevision();
                     if (bundle.getBundleId() > 0 && !brev.isFragment() && matches.get(brev) == null) {
                         XPackageCapability bcap = getCapabilityCandidate(context, pkgreq, brev);
-                        if (bcap != null) {
+                        if (bcap != null && isUsesConsistent(bcap)) {
                             matches.put(brev, bcap);
                         }
                     }
                 }
             }
+
+            // The resolver hooks see all candidates of the dynamic import at once
+            if (matches.size() > 0) {
+                Collection<XPackageCapability> filtered = filterMatches(pkgreq, matches.values());
+                matches.values().retainAll(filtered);
+            }
             List<XBundleRevision> matchingRevisions = new ArrayList<XBundleRevision>(matches.keySet());
             if (matchingRevisions.size() > 0) {
                 if (matchingRevisions.size() > 1) {
-                    // Sort multiple revision candidates - highest version first
+                    // The framework preference: the highest package version, then the lowest bundle id
+                    final Map<XBundleRevision, XPackageCapability> capabilities = matches;
                     Collections.sort(matchingRevisions, new Comparator<XBundleRevision>() {
                         @Override
                         public int compare(XBundleRevision brevA, XBundleRevision brevB) {
-                            if (brevA.getSymbolicName().equals(brevB.getSymbolicName())) {
-                                return brevB.getVersion().compareTo(brevA.getVersion());
-                            } else {
-                                return (int) (brevB.getBundle().getBundleId() - brevA.getBundle().getBundleId());
-                            }
+                            int result = capabilities.get(brevB).getVersion().compareTo(capabilities.get(brevA).getVersion());
+                            if (result == 0)
+                                result = Long.compare(brevA.getBundle().getBundleId(), brevB.getBundle().getBundleId());
+                            return result;
                         }
                     });
                 }
@@ -353,11 +403,14 @@ final class FallbackLoader implements LocalLoader {
         }
     }
 
-    private boolean filterMatches(XPackageRequirement req, XPackageCapability cap) {
+    /**
+     * The candidates that the resolver hooks leave for the dynamic requirement, in one resolve operation
+     */
+    private Collection<XPackageCapability> filterMatches(XPackageRequirement req, Collection<XPackageCapability> caps) {
 
         // Cannot filter invalid types
-        if (!(req instanceof BundleRequirement) || !(cap instanceof BundleCapability))
-            return true;
+        if (!(req instanceof BundleRequirement))
+            return caps;
 
         boolean callHookLifecycle = false;
         ResolverHookProcessor hookregs = ResolverHookProcessor.getCurrentProcessor();
@@ -369,10 +422,13 @@ final class FallbackLoader implements LocalLoader {
 
         // Nothing to filter
         if (hookregs.hasResolverHooks() == false)
-            return true;
+            return caps;
 
-        Collection<BundleCapability> bcaps = new HashSet<BundleCapability>();
-        bcaps.add((BundleCapability) cap);
+        Collection<BundleCapability> bcaps = new ArrayList<BundleCapability>();
+        for (XPackageCapability cap : caps) {
+            if (cap instanceof BundleCapability)
+                bcaps.add((BundleCapability) cap);
+        }
         bcaps = new RemoveOnlyCollection<BundleCapability>(bcaps);
 
         if (callHookLifecycle) {
@@ -386,7 +442,48 @@ final class FallbackLoader implements LocalLoader {
             hookregs.filterMatches((BundleRequirement) req, bcaps);
         }
 
-        return bcaps.contains(cap);
+        Collection<XPackageCapability> result = new ArrayList<XPackageCapability>();
+        for (XPackageCapability cap : caps) {
+            if (!(cap instanceof BundleCapability) || bcaps.contains(cap))
+                result.add(cap);
+        }
+        return result;
+    }
+
+    /**
+     * A candidate is consistent with the class space of the host when every package that it uses, and that the host
+     * sees, comes from the same provider for both (uses constraint, 3.7.6)
+     */
+    private boolean isUsesConsistent(XPackageCapability cap) {
+        String uses = cap.getDirective(Constants.USES_DIRECTIVE);
+        if (uses == null)
+            return true;
+        XBundleRevision exporter = (XBundleRevision) cap.getResource();
+        for (String usedPackage : uses.split(",")) {
+            usedPackage = usedPackage.trim();
+            BundleRevision hostSource = getPackageSource(hostRev, usedPackage);
+            BundleRevision exporterSource = getPackageSource(exporter, usedPackage);
+            if (hostSource != null && exporterSource != null && hostSource != exporterSource)
+                return false;
+        }
+        return true;
+    }
+
+    // The revision that provides a package to the given revision: an import wire, else the revision itself if it exports it
+    private BundleRevision getPackageSource(BundleRevision brev, String packageName) {
+        BundleWiring wiring = brev.getWiring();
+        if (wiring != null) {
+            List<BundleWire> wires = wiring.getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE);
+            for (BundleWire wire : wires != null ? wires : Collections.<BundleWire>emptyList()) {
+                if (packageName.equals(wire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE)))
+                    return wire.getProvider();
+            }
+        }
+        for (XPackageCapability pcap : getPackageCapabilities(brev)) {
+            if (packageName.equals(pcap.getPackageName()))
+                return brev;
+        }
+        return null;
     }
 
     private void findInUnresolvedRevisions(DynamicLoadContext context, List<XPackageRequirement> matchingPatterns) {
@@ -397,15 +494,61 @@ final class FallbackLoader implements LocalLoader {
             for (Bundle bundle : unresolved)
                 LOGGER.tracef("   %s", bundle);
         }
-        for (Bundle bundle : unresolved) {
-            if (!(bundle instanceof AbstractBundleState)) {
-                LOGGER.tracef("Ignore invalid bundle type: %s", bundle);
-                continue;
+        // The bundles are resolved without the lock of this loader: a resolve takes the framework wiring lock, which a
+        // lifecycle operation holds while it loads classes through this loader
+        int holdCount = fallbackLock.getHoldCount();
+        for (int i = 0; i < holdCount; i++)
+            fallbackLock.unlock();
+        try {
+            for (Bundle bundle : unresolved) {
+                if (!(bundle instanceof AbstractBundleState)) {
+                    LOGGER.tracef("Ignore invalid bundle type: %s", bundle);
+                    continue;
+                }
+                LOGGER.tracef("Attempt to resolve: %s", bundle);
+                AbstractBundleState.assertBundleState(bundle).ensureResolved(false);
             }
-            LOGGER.tracef("Attempt to resolve: %s", bundle);
-            AbstractBundleState.assertBundleState(bundle).ensureResolved(false);
+        } finally {
+            for (int i = 0; i < holdCount; i++)
+                fallbackLock.lock();
         }
         findInResolvedRevisions(context, matchingPatterns);
+    }
+
+    /**
+     * A directory like META-INF/services is not a package and cannot be exported. A dynamic import pattern like
+     * META-INF.* finds a resource in it in the content of a resolved bundle, as the class loading of WildFly modules does
+     * for the ServiceLoader.
+     */
+    private void findResourceDirectory(DynamicLoadContext context) {
+        if (context.resName.endsWith(".class") || isPackageName(context.packageName))
+            return;
+        List<XBundle> resolved = new ArrayList<XBundle>(bundleManager.getBundles(Bundle.RESOLVED | Bundle.ACTIVE | Bundle.STARTING));
+        Collections.sort(resolved, new Comparator<XBundle>() {
+            @Override
+            public int compare(XBundle b1, XBundle b2) {
+                return Long.compare(b1.getBundleId(), b2.getBundleId());
+            }
+        });
+        for (XBundle bundle : resolved) {
+            XBundleRevision brev = bundle.getBundleRevision();
+            if (bundle != hostBundle && bundle.getBundleId() > 0 && !brev.isFragment() && brev.getEntry(context.resName) != null) {
+                context.targetRevision = brev;
+                return;
+            }
+        }
+    }
+
+    private static boolean isPackageName(String packageName) {
+        for (String segment : packageName.split("\\.")) {
+            if (segment.isEmpty() || !Character.isJavaIdentifierStart(segment.charAt(0)))
+                return false;
+            for (int i = 1; i < segment.length(); i++) {
+                if (!Character.isJavaIdentifierPart(segment.charAt(i)))
+                    return false;
+            }
+        }
+        return true;
     }
 
     private void findInSystemRevision(DynamicLoadContext context, List<XPackageRequirement> matchingPatterns) {
@@ -426,7 +569,7 @@ final class FallbackLoader implements LocalLoader {
                 if (packageName.equals(pcap.getPackageName()) == false)
                     continue;
                 for (XPackageRequirement pkgreq : matchingPatterns) {
-                    if (pkgreq.matches(pcap) && filterMatches(pkgreq, pcap)) {
+                    if (pkgreq.matches(pcap) && filterMatches(pkgreq, Collections.singleton(pcap)).contains(pcap)) {
                         context.targetRevision = frameworkState.getSystemBundle().getBundleRevision();
                         context.capability = pcap;
                         context.requirement = pkgreq;
@@ -437,73 +580,36 @@ final class FallbackLoader implements LocalLoader {
         }
     }
 
+    /**
+     * The package capability of the requested package that the revision exports, also through its fragments. The
+     * exporter is not selected by its content: the class or resource is then loaded by the exporter.
+     */
     private XPackageCapability getCapabilityCandidate(DynamicLoadContext context, XPackageRequirement pkgreq, XBundleRevision brev) {
 
         // Skip dynamic loads from this module
         if (brev == hostRev)
             return null;
 
-        String resName = context.resName;
-        LOGGER.tracef("Attempt to find path dynamically [%s] in %s ...", resName, brev);
-        URL resURL = brev.getEntry(resName);
-        if (resURL == null) {
-            AbstractCommonBundleRevision cRev = (AbstractCommonBundleRevision) brev;
-            Iterator<String> itpaths = cRev.getOSGiMetaData().getBundleClassPath().iterator();
-            while (resURL == null && itpaths.hasNext()) {
-                String path = itpaths.next();
-                if (!path.contains("*") && !path.endsWith(".jar")) {
-                    resURL = brev.getEntry(path + "/" + resName);
-                }
-            }
-        }
-        if (resURL == null) {
-            return null;
-        }
-
-        XPackageCapability cap = getCandidateCapability(brev, pkgreq, resName);
-        return (cap != null && filterMatches(pkgreq, cap) ? cap : null);
-    }
-
-    private XPackageCapability getCandidateCapability(BundleRevision brev, XPackageRequirement preq, String resName) {
-        int bestIndex = 0;
-        XPackageCapability result = null;
-        boolean wildcardreq = preq.getPackageName().endsWith("*");
+        LOGGER.tracef("Attempt to find package dynamically [%s] in %s ...", context.packageName, brev);
         for (XPackageCapability pcap : getPackageCapabilities(brev)) {
-            if (preq.matches(pcap)) {
-                LOGGER.tracef("Matching package capability: %s", pcap);
-                if (wildcardreq) {
-                    String capName = pcap.getPackageName().replace('.', '/');
-                    for (int index = 0; index < Math.min(capName.length(), resName.length()); index++) {
-                        char chcap = capName.charAt(index);
-                        char chres = resName.charAt(index);
-                        if (chcap == chres && index > bestIndex) {
-                            bestIndex = index;
-                            result = pcap;
-                        }
-                    }
-                } else {
-                    result = pcap;
-                    break;
-                }
+            if (context.packageName.equals(pcap.getPackageName()) && pkgreq.matches(pcap)) {
+                return pcap;
             }
         }
-        return result;
+        return null;
     }
 
-    private String getPatternPath(final String pattern) {
-
-        String patternPath = pattern;
-        if (pattern.endsWith(".*"))
-            patternPath = pattern.substring(0, pattern.length() - 2);
-
-        patternPath = patternPath.replace('.', '/');
-        return patternPath;
-    }
-
+    // The exported packages of a revision, those of a resolved revision include the exports of its fragments
     private List<XPackageCapability> getPackageCapabilities(BundleRevision brev) {
+        BundleWiring wiring = brev.getWiring();
+        List<? extends Capability> caps = wiring != null ? wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE) : null;
+        if (caps == null)
+            caps = brev.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE);
         List<XPackageCapability> result = new ArrayList<XPackageCapability>();
-        for (Capability aux : brev.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
-            result.add(((XCapability) aux).adapt(XPackageCapability.class));
+        for (Capability aux : caps) {
+            XPackageCapability pcap = ((XCapability) aux).adapt(XPackageCapability.class);
+            if (pcap != null)
+                result.add(pcap);
         }
         return result;
     }
@@ -531,12 +637,16 @@ final class FallbackLoader implements LocalLoader {
     class DynamicLoadContext {
 
         final String resName;
+        // The package of the class or resource, null for a resource in the root
+        final String packageName;
         XBundleRevision targetRevision;
         XPackageRequirement requirement;
         XPackageCapability capability;
 
         DynamicLoadContext(String resName) {
             this.resName = resName;
+            int idx = resName.lastIndexOf('/');
+            this.packageName = idx > 0 ? resName.substring(0, idx).replace('/', '.') : null;
         }
     }
 }

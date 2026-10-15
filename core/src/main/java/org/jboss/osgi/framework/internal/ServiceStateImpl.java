@@ -75,7 +75,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private final long serviceId;
     private final ValueProvider<S> valueProvider;
     private final ServiceReference<S> reference;
-    private ServiceRegistration<S> registration;
+    private volatile ServiceRegistration<S> registration;
     // The registration that is passed to a prototype factory, also after the service is unregistered
     private final ServiceRegistration<S> factoryRegistration;
     private Set<XBundle> usingBundles;
@@ -86,10 +86,12 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private boolean prototypeValuesReleased;
     // Only one thread unregisters the service, the others see it as unregistered
     private final AtomicBoolean unregistering = new AtomicBoolean();
+    // The UNREGISTERING event was delivered: the service cannot be obtained any more
+    private volatile boolean released;
 
     // The properties
-    private CaseInsensitiveDictionary prevProperties;
-    private CaseInsensitiveDictionary currProperties;
+    private volatile CaseInsensitiveDictionary prevProperties;
+    private volatile CaseInsensitiveDictionary currProperties;
 
     @SuppressWarnings("unchecked")
     ServiceStateImpl(ServiceManager serviceManager, XBundle owner, long serviceId, String[] classNames, ValueProvider<S> valueProvider, Dictionary properties) {
@@ -107,19 +109,50 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         if (!valueProvider.isFactoryValue() && !checkValidClassNames(owner, classNames, valueProvider.getValue()))
             throw MESSAGES.illegalArgumentInvalidObjectClass(Arrays.toString(classNames));
 
-        if (properties == null)
-            properties = new Hashtable();
-
-        properties.put(Constants.SERVICE_ID, serviceId);
-        properties.put(Constants.OBJECTCLASS, classNames);
-        properties.put(Constants.SERVICE_BUNDLEID, owner.getBundleId());
-        properties.put(Constants.SERVICE_SCOPE, getServiceScope());
-        this.currProperties = new CaseInsensitiveDictionary(properties);
+        this.currProperties = withFrameworkProperties(properties, serviceId, classNames, owner.getBundleId(), getServiceScope());
 
         // Create the {@link ServiceRegistration} and {@link ServiceReference}
         this.registration = new ServiceRegistrationWrapper(this);
         this.factoryRegistration = registration;
         this.reference = new ServiceReferenceWrapper(this);
+    }
+
+    /**
+     * The properties of the service: a copy of the given properties with the properties of the framework. The
+     * dictionary of the caller is not changed, its keys of the framework properties are ignored in any case.
+     */
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    private static CaseInsensitiveDictionary withFrameworkProperties(Dictionary properties, Object serviceId, Object classNames, Object bundleId, Object scope) {
+        List<String> frameworkKeys = Arrays.asList(Constants.SERVICE_ID, Constants.OBJECTCLASS, Constants.SERVICE_BUNDLEID, Constants.SERVICE_SCOPE);
+        Hashtable copy = new Hashtable();
+        if (properties != null) {
+            Enumeration keys = properties.keys();
+            while (keys.hasMoreElements()) {
+                Object key = keys.nextElement();
+                boolean frameworkKey = false;
+                for (String aux : frameworkKeys)
+                    frameworkKey |= key instanceof String && aux.equalsIgnoreCase((String) key);
+                if (!frameworkKey)
+                    copy.put(key, properties.get(key));
+            }
+        }
+        copy.put(Constants.SERVICE_ID, serviceId);
+        copy.put(Constants.OBJECTCLASS, classNames);
+        copy.put(Constants.SERVICE_BUNDLEID, bundleId);
+        copy.put(Constants.SERVICE_SCOPE, scope);
+        // Rejects keys of the caller that differ only in case
+        return new CaseInsensitiveDictionary(copy);
+    }
+
+    /**
+     * The reference of a service, also when it was unregistered meanwhile: for the conversion of a snapshot of the
+     * registry, unlike {@link ServiceRegistration#getReference()}
+     */
+    @SuppressWarnings("unchecked")
+    static <T> ServiceReference<T> getReferenceInternal(ServiceState<T> serviceState) {
+        if (serviceState instanceof ServiceStateImpl)
+            return ((ServiceStateImpl<T>) serviceState).reference;
+        return serviceState.getReference();
     }
 
     static ServiceStateImpl assertServiceState(ServiceReference sref) {
@@ -430,25 +463,23 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     }
 
     @Override
-    @SuppressWarnings({ "unchecked" })
     public void setProperties(Dictionary properties) {
         assertNotUnregistered();
 
-        // Remember the previous properties for a potential
-        // delivery of the MODIFIED_ENDMATCH event
-        prevProperties = currProperties;
-
-        if (properties == null)
-            properties = new Hashtable();
-
-        properties.put(Constants.SERVICE_ID, currProperties.get(Constants.SERVICE_ID));
-        properties.put(Constants.OBJECTCLASS, currProperties.get(Constants.OBJECTCLASS));
-        properties.put(Constants.SERVICE_BUNDLEID, currProperties.get(Constants.SERVICE_BUNDLEID));
-        properties.put(Constants.SERVICE_SCOPE, currProperties.get(Constants.SERVICE_SCOPE));
-        currProperties = new CaseInsensitiveDictionary(properties);
+        // The properties before and after this modification are delivered with its event, a concurrent
+        // modification changes the current properties meanwhile
+        CaseInsensitiveDictionary previous, current;
+        synchronized (this) {
+            previous = currProperties;
+            current = withFrameworkProperties(properties, previous.get(Constants.SERVICE_ID), previous.get(Constants.OBJECTCLASS),
+                    previous.get(Constants.SERVICE_BUNDLEID), previous.get(Constants.SERVICE_SCOPE));
+            // Remember the previous properties for a potential delivery of the MODIFIED_ENDMATCH event
+            prevProperties = previous;
+            currProperties = current;
+        }
 
         // This event is synchronously delivered after the service properties have been modified.
-        serviceManager.fireServiceEvent(ownerBundle, ServiceEvent.MODIFIED, this);
+        FrameworkEventsImpl.ServiceModification.deliver(previous, current, () -> serviceManager.fireServiceEvent(ownerBundle, ServiceEvent.MODIFIED, this));
     }
 
     @Override
@@ -671,6 +702,18 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         return registration == null;
     }
 
+    /**
+     * True when the UNREGISTERING event of the service was delivered: the service objects are released, the service
+     * cannot be obtained any more
+     */
+    boolean isReleased() {
+        return released || registration == null;
+    }
+
+    void setReleased() {
+        released = true;
+    }
+
     private void assertNotUnregistered() {
         if (isUnregistered())
             throw MESSAGES.illegalStateServiceUnregistered(this);
@@ -737,7 +780,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
             if (useCount.get() == 0) {
                 // The Framework must not allow this method to be concurrently called for the same bundle
                 synchronized (bundle) {
-                    T retValue = (T) factory.getService(bundle, getRegistration());
+                    T retValue = (T) factory.getService(bundle, factoryRegistration);
                     if (retValue == null)
                         return null;
 
@@ -762,7 +805,7 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
             // Call unget on the factory when done
             if (useCount.decrementAndGet() == 0) {
                 synchronized (bundle) {
-                    factory.ungetService(bundle, getRegistration(), value);
+                    factory.ungetService(bundle, factoryRegistration, value);
                     value = null;
                 }
             }

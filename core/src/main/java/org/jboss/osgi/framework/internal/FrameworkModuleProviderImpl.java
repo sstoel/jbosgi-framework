@@ -210,7 +210,7 @@ public class FrameworkModuleProviderImpl implements FrameworkModuleProvider {
 
         @Override
         public Package loadPackageLocal(String name) {
-            throw new UnsupportedOperationException();
+            return classLoader.getDefinedPackage(name);
         }
 
         @Override

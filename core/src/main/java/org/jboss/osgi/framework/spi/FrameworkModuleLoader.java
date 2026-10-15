@@ -57,6 +57,15 @@ public interface FrameworkModuleLoader {
 
     ServiceName getModuleServiceName(ModuleIdentifier identifier);
 
+    /**
+     * Whether modules that the framework does not know as bundles depend on the module of the given revision, like the
+     * module of a deployment that names it as a module dependency. Such a revision is in use: when it is not the current
+     * revision any more it is removal pending.
+     */
+    default boolean isModuleInUse(XBundleRevision brev) {
+        return false;
+    }
+
     interface ModuleSpecBuilderContext {
 
         XBundleRevision getBundleRevision();

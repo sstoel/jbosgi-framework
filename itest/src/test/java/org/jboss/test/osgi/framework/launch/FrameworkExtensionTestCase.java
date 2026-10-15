@@ -472,8 +472,9 @@ public class FrameworkExtensionTestCase extends AbstractFrameworkLaunchTest {
         assertTrue(resolve(extension));
         assertEquals(1, ExtensionActivator.getEvents().size());
 
-        // The activator is stopped and started again with the framework
+        // The activator is stopped and started again with the framework, which updates on another thread
         framework.update();
+        assertEquals(FrameworkEvent.STOPPED_UPDATE, framework.waitForStop(10000).getType());
         for (int i = 0; i < 100 && framework.getState() != Bundle.ACTIVE; i++)
             Thread.sleep(100);
         assertEquals(Bundle.ACTIVE, framework.getState());

@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -55,6 +56,7 @@ import org.jboss.osgi.resolver.XResource;
 import org.jboss.osgi.resolver.XResourceCapability;
 import org.jboss.osgi.resolver.XWiring;
 import org.jboss.osgi.resolver.spi.AbstractBundleWire;
+import org.jboss.osgi.resolver.spi.AbstractResolveContext;
 import org.jboss.osgi.resolver.spi.ResolverHookProcessor;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
@@ -65,6 +67,7 @@ import org.osgi.framework.namespace.HostNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleWire;
+import org.osgi.resource.Capability;
 import org.osgi.resource.Requirement;
 import org.osgi.resource.Resource;
 import org.osgi.resource.Wire;
@@ -102,7 +105,7 @@ final class FrameworkResolverImpl implements XResolver {
     }
 
     @Override
-    public synchronized Map<Resource, List<Wire>> resolve(ResolveContext resolveContext) throws ResolutionException {
+    public Map<Resource, List<Wire>> resolve(ResolveContext resolveContext) throws ResolutionException {
         return resolveInternal((XResolveContext) resolveContext, false);
     }
 
@@ -112,7 +115,7 @@ final class FrameworkResolverImpl implements XResolver {
     }
 
     @Override
-    public synchronized Map<Resource, List<Wire>> resolveAndApply(XResolveContext resolveContext) throws ResolutionException {
+    public Map<Resource, List<Wire>> resolveAndApply(XResolveContext resolveContext) throws ResolutionException {
         return resolveInternal(resolveContext, true);
     }
 
@@ -122,6 +125,28 @@ final class FrameworkResolverImpl implements XResolver {
         // The framework must detect this and throw an Illegal State Exception.
         if (ResolverHookProcessor.getCurrentProcessor() != null)
             throw MESSAGES.illegalStateResolverHookCannotTriggerResolveOperation();
+
+        // One resolve operation at a time. The framework wiring lock serializes them, which the lifecycle operations take
+        // before they resolve: there is one lock order. The RESOLVED events are sent without it.
+        FrameworkWiringLock resolveLock = lockManager.getItemForType(FrameworkWiringLock.class);
+        LockContext resolveContextLock = lockManager.lockItems(Method.RESOLVE, resolveLock);
+        Map<Resource, List<Wire>> wiremap;
+        List<Map<Resource, List<Wire>>> resolved = new ArrayList<Map<Resource, List<Wire>>>();
+        try {
+            wiremap = resolveLocked(resolveContext, applyResults, resolved);
+        } finally {
+            lockManager.unlockItems(resolveContextLock);
+        }
+
+        // Send the {@link BundleEvent.RESOLVED} event outside the lock, for the resources of the resolver
+        if (applyResults && resolved.isEmpty() == false) {
+            sendBundleResolvedEvents(resolved.get(0));
+        }
+        return wiremap;
+    }
+
+    // The wire map of the resolver is added to the given list
+    private Map<Resource, List<Wire>> resolveLocked(XResolveContext resolveContext, boolean applyResults, List<Map<Resource, List<Wire>>> resolved) throws ResolutionException {
 
         XEnvironment env = resolveContext.getEnvironment();
         BundleContext syscontext = bundleManager.getSystemContext();
@@ -168,10 +193,27 @@ final class FrameworkResolverImpl implements XResolver {
                         return result;
                     }
                 });
-                resolveContext = resolver.createResolveContext(env, getFilteredResources(hookregs, manres), getFilteredResources(hookregs, optres));
+                // The context adds attachable fragments and unresolved bundles, a revision that the hooks removed stays removed
+                XResolveContext expanded = resolver.createResolveContext(env, getFilteredResources(hookregs, manres), getFilteredResources(hookregs, optres));
+                final Collection<Resource> filteredMandatory = getResolvableResources(hookregs, expanded.getMandatoryResources());
+                final Collection<Resource> filteredOptional = getResolvableResources(hookregs, expanded.getOptionalResources());
+                resolveContext = new AbstractResolveContext(env) {
+
+                    @Override
+                    public Collection<Resource> getMandatoryResources() {
+                        return Collections.unmodifiableCollection(filteredMandatory);
+                    }
+
+                    @Override
+                    public Collection<Resource> getOptionalResources() {
+                        return Collections.unmodifiableCollection(filteredOptional);
+                    }
+                };
             } else {
                 filterSingletons(manres, optres);
-                resolveContext = resolver.createResolveContext(env, manres, optres);
+                // The resolve context enforces the singleton policy, also for the singletons pulled in as providers
+                XResolveContext expanded = resolver.createResolveContext(env, manres, optres);
+                resolveContext = new SingletonResolveContext(env, expanded.getMandatoryResources(), expanded.getOptionalResources());
             }
 
             Map<Resource, List<Wire>> wiremap;
@@ -187,11 +229,7 @@ final class FrameworkResolverImpl implements XResolver {
                 lockManager.unlockItems(lockContext);
             }
 
-            // Send the {@link BundleEvent.RESOLVED} event outside the lock
-            if (applyResults) {
-                sendBundleResolvedEvents(wiremap);
-            }
-
+            resolved.add(wiremap);
             if (extwires.isEmpty() == false) {
                 wiremap = new LinkedHashMap<Resource, List<Wire>>(wiremap);
                 wiremap.putAll(extwires);
@@ -200,6 +238,17 @@ final class FrameworkResolverImpl implements XResolver {
         } finally {
             hookregs.end();
         }
+    }
+
+    // The resources without the unresolved bundle revisions that the hooks did not leave to be resolved
+    private Collection<Resource> getResolvableResources(ResolverHookProcessor hookregs, Collection<Resource> resources) {
+        Collection<Resource> result = new ArrayList<Resource>();
+        for (Resource res : resources) {
+            boolean unresolvedRevision = res instanceof XBundleRevision && ((XBundleRevision) res).getWiringSupport().getWiring(false) == null;
+            if (unresolvedRevision == false || hookregs.hasResource(res))
+                result.add(res);
+        }
+        return result;
     }
 
     private Collection<? extends Resource> getFilteredResources(ResolverHookProcessor hookregs, Collection<? extends Resource> resources) {
@@ -221,6 +270,82 @@ final class FrameworkResolverImpl implements XResolver {
         HashSet<Resource> combined = new HashSet<Resource>(manres);
         combined.addAll(optres);
         return combined;
+    }
+
+    /**
+     * A resolve context that lets only one singleton of a symbolic name be resolved: a resolved singleton, else the
+     * first one that the resolve operation uses
+     */
+    static final class SingletonResolveContext extends AbstractResolveContext {
+
+        private final Collection<Resource> mandatory = new ArrayList<Resource>();
+        private final Collection<Resource> optional = new ArrayList<Resource>();
+        private final Map<String, Resource> chosen = new HashMap<String, Resource>();
+
+        SingletonResolveContext(XEnvironment env, Collection<Resource> mandatory, Collection<Resource> optional) {
+            super(env);
+            Iterator<XResource> itres = env.getResources(Collections.singleton(XResource.TYPE_BUNDLE));
+            while (itres.hasNext()) {
+                XResource res = itres.next();
+                if (isSingleton(res) && res.getWiringSupport().getWiring(false) != null)
+                    chosen.put(res.getIdentityCapability().getName(), res);
+            }
+            this.mandatory.addAll(getAllowed(mandatory));
+            this.optional.addAll(getAllowed(optional));
+        }
+
+        private Collection<Resource> getAllowed(Collection<Resource> resources) {
+            List<Resource> sorted = new ArrayList<Resource>(resources);
+            Collections.sort(sorted, new Comparator<Resource>() {
+                @Override
+                public int compare(Resource r1, Resource r2) {
+                    return ((XResource) r2).getIdentityCapability().getVersion().compareTo(((XResource) r1).getIdentityCapability().getVersion());
+                }
+            });
+            Collection<Resource> result = new ArrayList<Resource>();
+            for (Resource res : sorted) {
+                if (isAllowed((XResource) res))
+                    result.add(res);
+            }
+            return result;
+        }
+
+        private boolean isAllowed(XResource res) {
+            if (!isSingleton(res) || res.getWiringSupport().getWiring(false) != null)
+                return true;
+            String name = res.getIdentityCapability().getName();
+            Resource singleton = chosen.get(name);
+            if (singleton == null)
+                chosen.put(name, singleton = res);
+            return singleton == res;
+        }
+
+        private static boolean isSingleton(XResource res) {
+            XIdentityCapability icap = res.getIdentityCapability();
+            return icap != null && icap.isSingleton();
+        }
+
+        @Override
+        public Collection<Resource> getMandatoryResources() {
+            return Collections.unmodifiableCollection(mandatory);
+        }
+
+        @Override
+        public Collection<Resource> getOptionalResources() {
+            return Collections.unmodifiableCollection(optional);
+        }
+
+        @Override
+        public List<Capability> findProviders(Requirement req) {
+            List<Capability> providers = super.findProviders(req);
+            Iterator<Capability> itcap = providers.iterator();
+            while (itcap.hasNext()) {
+                Resource res = itcap.next().getResource();
+                if (res instanceof XResource && !isAllowed((XResource) res))
+                    itcap.remove();
+            }
+            return providers;
+        }
     }
 
     private void filterSingletons(Collection<? extends Resource> manres, Collection<Resource> optres) {
@@ -323,12 +448,18 @@ final class FrameworkResolverImpl implements XResolver {
     }
 
     private void addModules(Map<BundleRevision, List<BundleWire>> wiremap) {
-        for (Map.Entry<BundleRevision, List<BundleWire>> entry : wiremap.entrySet()) {
-            XBundleRevision brev = (XBundleRevision) entry.getKey();
-            if (brev.isFragment() == false) {
-                List<BundleWire> wires = wiremap.get(brev);
-                moduleManager.addModule(brev, wires);
+        // The module of a requirer may depend on the wires of a provider that is wired by the same resolve operation
+        ModuleManagerImpl.setResolveWires(wiremap);
+        try {
+            for (Map.Entry<BundleRevision, List<BundleWire>> entry : wiremap.entrySet()) {
+                XBundleRevision brev = (XBundleRevision) entry.getKey();
+                if (brev.isFragment() == false) {
+                    List<BundleWire> wires = wiremap.get(brev);
+                    moduleManager.addModule(brev, wires);
+                }
             }
+        } finally {
+            ModuleManagerImpl.setResolveWires(null);
         }
     }
 
@@ -347,11 +478,18 @@ final class FrameworkResolverImpl implements XResolver {
         for (Map.Entry<BundleRevision, List<BundleWire>> entry : wiremap.entrySet()) {
             Bundle bundle = entry.getKey().getBundle();
             // The state of the system bundle follows the framework, it is STARTING while it gets wired
-            if (bundle instanceof AbstractBundleState && bundle.getBundleId() != 0) {
+            // Only the current revision of an INSTALLED bundle makes it RESOLVED, not an older revision of an updated bundle
+            if (bundle instanceof AbstractBundleState && bundle.getBundleId() != 0 && isCurrentRevision(entry.getKey())) {
                 AbstractBundleState<?> bundleState = (AbstractBundleState<?>) bundle;
-                bundleState.changeState(Bundle.RESOLVED, 0);
+                if (bundleState.getState() == Bundle.INSTALLED)
+                    bundleState.changeState(Bundle.RESOLVED, 0);
             }
         }
+    }
+
+    private static boolean isCurrentRevision(BundleRevision brev) {
+        Bundle bundle = brev.getBundle();
+        return bundle instanceof XBundle && ((XBundle) bundle).getBundleRevision() == brev;
     }
 
     private void sendBundleResolvedEvents(Map<Resource, List<Wire>> wiremap) {
@@ -360,7 +498,7 @@ final class FrameworkResolverImpl implements XResolver {
             if (res instanceof XBundleRevision) {
                 XBundleRevision brev = (XBundleRevision) res;
                 Bundle bundle = brev.getBundle();
-                if (bundle instanceof AbstractBundleState) {
+                if (bundle instanceof AbstractBundleState && isCurrentRevision(brev)) {
                     AbstractBundleState<?> bundleState = (AbstractBundleState<?>) bundle;
                     if (bundleManager.isFrameworkCreated()) {
                         bundleState.fireBundleEvent(BundleEvent.RESOLVED);

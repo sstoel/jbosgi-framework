@@ -76,6 +76,14 @@ public class BootstrapBundlesResolve<T> extends BootstrapBundlesService<T> {
         return injectedBundleManager.getValue();
     }
 
+    /**
+     * Whether the framework starts when not all bootstrap bundles can be resolved.
+     * By default an unresolvable bootstrap bundle fails the framework start.
+     */
+    protected boolean isLenientBootstrapResolve() {
+        return false;
+    }
+
     @Override
     public void start(final StartContext context) throws StartException {
 
@@ -107,7 +115,15 @@ public class BootstrapBundlesResolve<T> extends BootstrapBundlesService<T> {
             try {
                 resolver.resolveAndApply(ctx);
             } catch (ResolutionException ex) {
-                throw new StartException(ex);
+                if (!isLenientBootstrapResolve())
+                    throw new StartException(ex);
+                // A bootstrap bundle that cannot be resolved is reported and not started, the framework starts with the
+                // others: one unusable capability does not take down the framework
+                LOGGER.errorf(ex, "Cannot resolve all bootstrap bundles, the unresolved ones are not started");
+                List<Bundle> bundles = new ArrayList<Bundle>();
+                bundles.add(sysbundle);
+                bundles.addAll(resolvableBundles);
+                injectedFrameworkWiring.getValue().resolveBundles(bundles);
             }
         }
 

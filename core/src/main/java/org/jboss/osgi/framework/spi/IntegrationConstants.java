@@ -21,6 +21,7 @@
  */
 package org.jboss.osgi.framework.spi;
 
+import java.util.function.Supplier;
 import java.util.jar.Manifest;
 
 import org.jboss.modules.ModuleIdentifier;
@@ -42,6 +43,9 @@ public interface IntegrationConstants {
 
     /** The bundle activator attachment key */
     AttachmentKey<BundleActivator> BUNDLE_ACTIVATOR_KEY = AttachmentKey.create(BundleActivator.class);
+    /** The factory of the bundle activator, it gives a new activator for every start of the bundle */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    AttachmentKey<Supplier<BundleActivator>> BUNDLE_ACTIVATOR_FACTORY_KEY = (AttachmentKey) AttachmentKey.create(Supplier.class);
     /** The bundle attachment key */
     AttachmentKey<BundleInfo> BUNDLE_INFO_KEY = AttachmentKey.create(BundleInfo.class);
     /** The bundle attachment key */

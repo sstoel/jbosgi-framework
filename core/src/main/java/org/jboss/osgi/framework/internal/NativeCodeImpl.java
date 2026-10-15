@@ -76,100 +76,103 @@ public final class NativeCodeImpl implements NativeCode {
      */
     private static final String ABSPATH_VARIABLE = "${abspath}";
 
-    /** Maps an alias to an OSGi processor name */
-    private static Map<String, String> processorAlias = new HashMap<String, String>();
-    static {
-        // http://www.osgi.org/Specifications/Reference#processor
-        processorAlias.put("psc1k", "ignite");
-        processorAlias.put("power", "PowerPC");
-        processorAlias.put("ppc", "PowerPC");
-        processorAlias.put("ppc64", "PowerPC-64");
-        processorAlias.put("ppc64le", "PowerPC-64-LE");
-        processorAlias.put("pentium", "x86");
-        processorAlias.put("i386", "x86");
-        processorAlias.put("i486", "x86");
-        processorAlias.put("i586", "x86");
-        processorAlias.put("i686", "x86");
-        processorAlias.put("amd64", "x86-64");
-        processorAlias.put("em64t", "x86-64");
-        processorAlias.put("x86_64", "x86-64");
+    /** The OSGi processor names with their aliases, see https://docs.osgi.org/reference/osnames.html */
+    private static final List<List<String>> PROCESSOR_GROUPS = Arrays.asList(
+            Arrays.asList("68k"),
+            Arrays.asList("AArch64", "arm64"),
+            Arrays.asList("ARM_BE", "arm_be"),
+            Arrays.asList("ARM_LE", "arm_le"),
+            Arrays.asList("Alpha"),
+            Arrays.asList("Ignite", "psc1k"),
+            Arrays.asList("Mips"),
+            Arrays.asList("PARisc"),
+            Arrays.asList("PowerPC", "power", "ppc"),
+            Arrays.asList("PowerPC-64", "ppc64"),
+            Arrays.asList("PowerPC-64-LE", "ppc64le"),
+            Arrays.asList("S390"),
+            Arrays.asList("S390x"),
+            Arrays.asList("Sparc"),
+            Arrays.asList("V850E"),
+            Arrays.asList("x86", "pentium", "i386", "i486", "i586", "i686"),
+            Arrays.asList("x86-64", "amd64", "em64t", "x86_64"));
+
+    /** The OSGi operating system names with their aliases, see https://docs.osgi.org/reference/osnames.html */
+    private static final List<List<String>> OSNAME_GROUPS = Arrays.asList(
+            Arrays.asList("AIX"),
+            Arrays.asList("DigitalUnix"),
+            Arrays.asList("Embos"),
+            Arrays.asList("Epoc32", "SymbianOS"),
+            Arrays.asList("FreeBSD"),
+            Arrays.asList("HPUX", "hp-ux"),
+            Arrays.asList("IRIX"),
+            Arrays.asList("Linux"),
+            Arrays.asList("MacOS", "Mac OS"),
+            Arrays.asList("MacOSX", "Mac OS X"),
+            Arrays.asList("NetBSD"),
+            Arrays.asList("Netware"),
+            Arrays.asList("OpenBSD"),
+            Arrays.asList("OS2", "OS/2"),
+            Arrays.asList("QNX", "procnto"),
+            Arrays.asList("Solaris"),
+            Arrays.asList("SunOS"),
+            Arrays.asList("VxWorks"),
+            Arrays.asList("Windows95", "Windows 95", "Win95", "Win32"),
+            Arrays.asList("Windows98", "Windows 98", "Win98", "Win32"),
+            Arrays.asList("WindowsNT", "Windows NT", "WinNT", "Win32"),
+            Arrays.asList("WindowsCE", "Windows CE", "WinCE"),
+            Arrays.asList("Windows2000", "Windows 2000", "Win2000", "Win32"),
+            Arrays.asList("Windows2003", "Windows 2003", "Win2003", "Windows Server 2003", "Win32"),
+            Arrays.asList("WindowsXP", "Windows XP", "WinXP", "Win32"),
+            Arrays.asList("WindowsVista", "Windows Vista", "WinVista", "Win32"),
+            Arrays.asList("Windows7", "Windows 7", "Win7", "Win32"),
+            Arrays.asList("Windows8", "Windows 8", "Win8", "Win32"),
+            Arrays.asList("Windows10", "Windows 10", "Win10", "Win32"),
+            Arrays.asList("Windows11", "Windows 11", "Win11", "Win32"),
+            Arrays.asList("WindowsServer2008", "Windows Server 2008", "Win32"),
+            Arrays.asList("WindowsServer2012", "Windows Server 2012", "Win32"),
+            Arrays.asList("WindowsServer2016", "Windows Server 2016", "Win32"),
+            Arrays.asList("WindowsServer2019", "Windows Server 2019", "Win32"),
+            Arrays.asList("WindowsServer2022", "Windows Server 2022", "Win32"));
+
+    /**
+     * The given name followed by the names of every group that contains it, compared without case
+     */
+    private static List<String> getAliases(String name, List<List<String>> groups) {
+        List<String> result = new ArrayList<String>();
+        if (name != null) {
+            result.add(name);
+            for (List<String> group : groups) {
+                if (containsIgnoreCase(group, name)) {
+                    for (String alias : group) {
+                        if (containsIgnoreCase(result, alias) == false)
+                            result.add(alias);
+                    }
+                }
+            }
+        }
+        return result;
     }
 
-    /** Maps an alias to an OSGi osname */
-    private static Map<String, String []> osAlias = new HashMap<String, String []>();
-    static {
-        // http://www.osgi.org/Specifications/Reference#os
-        osAlias.put("SymbianOS", new String[] { "Epoc32" });
-        osAlias.put("hp-ux", new String[] { "HPUX" });
-        osAlias.put("Mac OS", new String[] { "MacOS" });
-        osAlias.put("Mac OS X", new String[] { "MacOSX" });
-        osAlias.put("OS/2", new String[] { "OS2" });
-        osAlias.put("procnto", new String[] { "QNX" });
-
-        osAlias.put("Windows 95", new String[] { "Windows95" });
-        osAlias.put("Win95", new String[] { "Windows95" });
-
-        osAlias.put("Windows 98", new String[] { "Windows98" });
-        osAlias.put("Win98", new String[] { "Windows98" });
-
-        osAlias.put("Windows NT", new String[] { "WindowsNT" });
-        osAlias.put("WinNT", new String[] { "WindowsNT" });
-
-        osAlias.put("Windows CE", new String[] { "WindowsCE" });
-        osAlias.put("WinCE", new String[] { "WindowsCE" });
-
-        osAlias.put("Windows 2000", new String[] { "Windows2000" });
-        osAlias.put("Win2000", new String[] { "Windows2000" });
-
-        osAlias.put("Windows XP", new String[] { "WindowsXP" });
-        osAlias.put("WinXP", new String[] { "WindowsXP" });
-
-        osAlias.put("Windows 2003", new String[] { "Windows2003" });
-        osAlias.put("Win2003", new String[] { "Windows2003" });
-        osAlias.put("Windows Server 2003", new String[] { "Windows2003" });
-
-        osAlias.put("Windows Vista", new String[] { "WindowsVista" });
-        osAlias.put("WinVista", new String[] { "WindowsVista" });
-
-        osAlias.put("Windows 7", new String[] { "Windows7" });
-        osAlias.put("Win7", new String[] { "Windows7" });
-
-        osAlias.put("Windows 8", new String[] { "Windows8" });
-        osAlias.put("Win8", new String[] { "Windows8" });
-
-        osAlias.put("Windows Server 2008", new String[] { "WindowsServer2008" });
-        osAlias.put("Windows Server 2012", new String[] { "WindowsServer2012" });
-
-        osAlias.put("Win32", new String[] { "Windows95", "Windows98", "WindowsNT", "WindowsCE", "Windows2000", "WindowsXP",
-                "Windows2003", "WindowsVista", "Windows7", "Windows8", "WindowsServer2008", "WindowsServer2012" });
+    private static boolean containsIgnoreCase(Collection<String> values, String value) {
+        for (String aux : values) {
+            if (aux.equalsIgnoreCase(value))
+                return true;
+        }
+        return false;
     }
 
     /**
      * The values of the osgi.native.osname attribute for the given framework os name
      */
     static List<String> getOSNames(String fwOSName) {
-        List<String> result = new ArrayList<String>();
-        if (fwOSName != null) {
-            result.add(fwOSName);
-            String[] canonicalNames = osAlias.get(fwOSName);
-            if (canonicalNames != null)
-                result.addAll(Arrays.asList(canonicalNames));
-        }
-        return result;
+        return getAliases(fwOSName, OSNAME_GROUPS);
     }
 
     /**
      * The values of the osgi.native.processor attribute for the given framework processor
      */
     static List<String> getProcessors(String fwProcessor) {
-        List<String> result = new ArrayList<String>();
-        if (fwProcessor != null) {
-            result.add(fwProcessor);
-            String canonicalName = processorAlias.get(fwProcessor);
-            if (canonicalName != null)
-                result.add(canonicalName);
-        }
-        return result;
+        return getAliases(fwProcessor, PROCESSOR_GROUPS);
     }
 
     private final BundleManagerPlugin bundleManager;
@@ -201,6 +204,9 @@ public final class NativeCodeImpl implements NativeCode {
         // Find the matching parameters
         List<ParameterizedAttribute> matchedParams = new ArrayList<ParameterizedAttribute>();
         for (ParameterizedAttribute param : params) {
+            // The optional marker is not a clause
+            if ("*".equals(param.getAttribute()))
+                continue;
             if (matchParameter(param))
                 matchedParams.add(param);
         }
@@ -257,50 +263,33 @@ public final class NativeCodeImpl implements NativeCode {
         // * selection-filter evaluates to true when using the values of the system properties or selection-filter is not
         // specified
 
-        // osname ~= [org.osgi.framework.os.name]
+        // osname ~= [org.osgi.framework.os.name] or osname is not specified
         Parameter osnameParam = param.getAttribute(Constants.BUNDLE_NATIVECODE_OSNAME);
         BundleContext systemContext = bundleManager.getSystemBundle().getBundleContext();
-        boolean match = (osnameParam != null);
-        if (match == true && osnameParam != null) {
-            String fwOSName = systemContext.getProperty(Constants.FRAMEWORK_OS_NAME);
-
+        boolean match = true;
+        if (osnameParam != null) {
+            List<String> fwOSNames = getOSNames(systemContext.getProperty(Constants.FRAMEWORK_OS_NAME));
             boolean osmatch = false;
-            Collection<String> osNames = getCollection(osnameParam.getValue());
-            for (String osname : osNames) {
-                osmatch = osname.equalsIgnoreCase(fwOSName);
-                if(!osmatch) {
-                    String [] canonicalNames = osAlias.get(fwOSName);
-                    if (canonicalNames != null) {
-                        for (String canonicalName : canonicalNames) {
-                            osmatch = osname.equalsIgnoreCase(canonicalName);
-                            if (osmatch) {
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (osmatch) {
+            for (String osname : getCollection(osnameParam.getValue())) {
+                if (containsIgnoreCase(fwOSNames, osname)) {
+                    osmatch = true;
                     break;
                 }
             }
-
             match &= osmatch;
         }
 
-        // processor ~= [org.osgi.framework.processor]
+        // processor ~= [org.osgi.framework.processor] or processor is not specified
         Parameter procParam = param.getAttribute(Constants.BUNDLE_NATIVECODE_PROCESSOR);
-        match &= (procParam != null);
         if (match && procParam != null) {
-            String fwProcessor = systemContext.getProperty(Constants.FRAMEWORK_PROCESSOR);
-
+            List<String> fwProcessors = getProcessors(systemContext.getProperty(Constants.FRAMEWORK_PROCESSOR));
             boolean procmatch = false;
-            List<String> processors = getCollection(procParam.getValue());
-            for (String proc : processors) {
-                procmatch = (proc.equals(fwProcessor) || proc.equals(processorAlias.get(fwProcessor)));
-                if (procmatch == true)
+            for (String proc : getCollection(procParam.getValue())) {
+                if (containsIgnoreCase(fwProcessors, proc)) {
+                    procmatch = true;
                     break;
+                }
             }
-
             match &= procmatch;
         }
 
@@ -332,7 +321,7 @@ public final class NativeCodeImpl implements NativeCode {
 
             boolean languageMatch = false;
             for (String language : getCollection(languageParam.getValue())) {
-                if (language.equals(fwLanguage)) {
+                if (language.equalsIgnoreCase(fwLanguage)) {
                     languageMatch = true;
                     break;
                 }

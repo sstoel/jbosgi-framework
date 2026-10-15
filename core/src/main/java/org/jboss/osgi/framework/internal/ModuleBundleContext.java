@@ -78,7 +78,7 @@ public final class ModuleBundleContext extends AbstractBundleContext<XBundle> {
         List<ServiceReference<?>> result = new ArrayList<ServiceReference<?>>();
         for (ServiceState<?> serviceState : serviceStates) {
             if (!serviceState.isUnregistered())
-                result.add(serviceState.getReference());
+                result.add(ServiceStateImpl.getReferenceInternal(serviceState));
         }
         return result.isEmpty() ? null : result.toArray(new ServiceReference<?>[result.size()]);
     }

@@ -258,8 +258,17 @@ public final class StorageManagerImpl implements StorageManager {
 
     @Override
     public synchronized void deleteStorageState(StorageState storageState) {
+        deleteStorageState(storageState, true);
+    }
+
+    /**
+     * Delete the storage of a bundle. The content of a revision that is still in use (removal pending) stays open, the
+     * revision closes it when it is removed.
+     */
+    synchronized void deleteStorageState(StorageState storageState, boolean closeContent) {
         LOGGER.debugf("Deleting storage state: %s", storageState);
-        VFSUtils.safeClose(storageState.getRootFile());
+        if (closeContent)
+            VFSUtils.safeClose(storageState.getRootFile());
         deleteRecursive(storageState.getStorageDir());
         storageStates.remove(storageState.getLocation());
     }

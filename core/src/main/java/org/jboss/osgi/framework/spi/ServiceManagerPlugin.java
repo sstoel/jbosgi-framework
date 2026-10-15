@@ -56,6 +56,6 @@ public class ServiceManagerPlugin extends AbstractIntegrationService<ServiceMana
     @Override
     protected ServiceManager createServiceValue(StartContext startContext) throws StartException {
         FrameworkEvents events = injectedFrameworkEvents.getValue();
-        return new ServiceManagerImpl(events);
+        return new ServiceManagerImpl(events, injectedBundleManager.getValue());
     }
 }

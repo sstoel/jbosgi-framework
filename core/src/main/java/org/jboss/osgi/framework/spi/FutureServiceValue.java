@@ -97,7 +97,9 @@ public final class FutureServiceValue<T> implements Future<T> {
 
     private T getValue(long timeout, TimeUnit unit) throws ExecutionException, TimeoutException {
 
-        if (controller.getState() == expectedState) {
+        // The public state REMOVED also stands for the substate REMOVING, in which the name of the service is not released
+        // yet: for REMOVED the listener waits for the REMOVED event, which MSC sends at once for a removed service
+        if (controller.getState() == expectedState && expectedState != ServiceController.State.REMOVED) {
             return ServiceController.State.UP == expectedState ? controller.getValue() : null;
         }
 

@@ -23,7 +23,9 @@ package org.jboss.osgi.framework.internal;
 
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 
+import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Dictionary;
@@ -35,6 +37,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.jboss.osgi.framework.spi.BundleManager;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.ServiceManager;
 import org.jboss.osgi.framework.spi.ServiceState;
@@ -43,6 +46,7 @@ import org.jboss.osgi.resolver.spi.RemoveOnlyCollection;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.Filter;
+import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.framework.ServiceEvent;
@@ -62,13 +66,25 @@ import org.osgi.framework.hooks.service.ListenerHook.ListenerInfo;
 public final class ServiceManagerImpl implements ServiceManager {
 
     private final FrameworkEvents frameworkEvents;
+    private final BundleManager bundleManager;
     private final Map<String, List<ServiceState<?>>> serviceContainer = new HashMap<String, List<ServiceState<?>>>();
-    private final ThreadLocal<Bundle> getServiceRecursion = new ThreadLocal<Bundle>();
+    // The services that are being obtained in this thread, by the bundle that obtains them
+    private final ThreadLocal<Set<Map.Entry<XBundle, ServiceState<?>>>> getServiceInProgress = new ThreadLocal<Set<Map.Entry<XBundle, ServiceState<?>>>>();
     private final AtomicLong identityGenerator = new AtomicLong();
 
-
     public ServiceManagerImpl(FrameworkEvents frameworkEvents) {
+        this(frameworkEvents, null);
+    }
+
+    public ServiceManagerImpl(FrameworkEvents frameworkEvents, BundleManager bundleManager) {
         this.frameworkEvents = frameworkEvents;
+        this.bundleManager = bundleManager;
+    }
+
+    // The hooks are used by the framework, as the system bundle
+    private XBundle getHookUser(XBundle bundle) {
+        XBundle systemBundle = bundleManager != null ? bundleManager.getSystemBundle() : null;
+        return systemBundle != null ? systemBundle : bundle;
     }
 
     @Override
@@ -101,13 +117,6 @@ public final class ServiceManagerImpl implements ServiceManager {
     public ServiceState registerService(XBundle bundle, String[] classNames, final Object serviceValue, Dictionary properties) {
         assert classNames != null && classNames.length > 0 : "Null service classes";
 
-        // Immediately after registration of a {@link ListenerHook}, the ListenerHook.added() method will be called
-        // to provide the current collection of service listeners which had been added prior to the hook being registered.
-        Collection<ListenerInfo> listenerInfos = null;
-        if (serviceValue instanceof ListenerHook) {
-            listenerInfos = frameworkEvents.getServiceListenerInfos(null);
-        }
-
         ServiceState.ValueProvider<Object> valueProvider = new ServiceState.ValueProvider<Object>() {
             @Override
             public boolean isFactoryValue() {
@@ -139,10 +148,22 @@ public final class ServiceManagerImpl implements ServiceManager {
         }
         bundleServices.addRegisteredService(serviceState);
 
-        // Call the newly added ListenerHook.added() method
-        if (serviceValue instanceof ListenerHook) {
-            ListenerHook listenerHook = (ListenerHook) serviceValue;
-            listenerHook.added(listenerInfos);
+        // Immediately after registration of a {@link ListenerHook}, the ListenerHook.added() method will be called
+        // to provide the current collection of service listeners which had been added prior to the hook being registered.
+        // The hook is known by its registered class name, it may be registered as a ServiceFactory
+        if (Arrays.asList(classNames).contains(ListenerHook.class.getName())) {
+            XBundle hookUser = getHookUser(bundle);
+            Collection<ListenerInfo> listenerInfos = frameworkEvents.getServiceListenerInfos(null);
+            Object hook = getService(hookUser, serviceState);
+            if (hook instanceof ListenerHook) {
+                try {
+                    ((ListenerHook) hook).added(listenerInfos);
+                } catch (RuntimeException ex) {
+                    LOGGER.errorProcessingServiceListenerHook(ex, (ListenerHook) hook);
+                } finally {
+                    ungetService(hookUser, serviceState);
+                }
+            }
         }
 
         // This event is synchronously delivered after the service has been registered with the Framework.
@@ -231,6 +252,12 @@ public final class ServiceManagerImpl implements ServiceManager {
         return Collections.unmodifiableList(resultList);
     }
 
+    private static boolean isReleased(ServiceState<?> serviceState) {
+        if (serviceState instanceof ServiceStateImpl)
+            return ((ServiceStateImpl<?>) serviceState).isReleased();
+        return serviceState.isUnregistered();
+    }
+
     private boolean isMatchingService(XBundle bundle, ServiceState<?> serviceState, String clazzName, Filter filter, boolean checkAssignable) {
         if (serviceState.isUnregistered() || filter.match(serviceState) == false)
             return false;
@@ -247,19 +274,29 @@ public final class ServiceManagerImpl implements ServiceManager {
      */
     @Override
     public <S> S getService(XBundle bundle, ServiceState<S> serviceState) {
-        // If the service has been unregistered, null is returned.
-        if (serviceState.isUnregistered())
+        // If the service has been unregistered, null is returned. That is also the case once the UNREGISTERING
+        // event was delivered: the framework releases the service objects
+        if (isReleased(serviceState))
             return null;
 
-        // If this method is called recursively for the same bundle
-        // then it must return null to break the recursion.
-        if (getServiceRecursion.get() == bundle)
+        // If the ServiceFactory.getService method is called recursively for the same bundle and service, null is
+        // returned and a Framework event of type FrameworkEvent.ERROR is fired
+        Map.Entry<XBundle, ServiceState<?>> usage = new AbstractMap.SimpleImmutableEntry<XBundle, ServiceState<?>>(bundle, serviceState);
+        Set<Map.Entry<XBundle, ServiceState<?>>> inProgress = getServiceInProgress.get();
+        if (inProgress != null && inProgress.contains(usage)) {
+            ServiceException sex = new ServiceException("Recursive getService for " + serviceState + " by " + bundle, ServiceException.FACTORY_RECURSION);
+            frameworkEvents.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, sex);
             return null;
+        }
 
         S value;
+        boolean outermost = inProgress == null;
+        if (outermost) {
+            inProgress = new HashSet<Map.Entry<XBundle, ServiceState<?>>>();
+            getServiceInProgress.set(inProgress);
+        }
+        inProgress.add(usage);
         try {
-            getServiceRecursion.set(bundle);
-
             // Add the given service ref to the list of used services
             BundleServices bundleServices = BundleServices.get(bundle);
             bundleServices.addServiceInUse(serviceState);
@@ -273,8 +310,16 @@ public final class ServiceManagerImpl implements ServiceManager {
                 bundleServices.removeServiceInUse(serviceState);
                 serviceState.removeUsingBundle(bundle);
             }
+
+            // The service was released meanwhile, this use would not be released any more
+            else if (isReleased(serviceState)) {
+                ungetService(bundle, serviceState);
+                value = null;
+            }
         } finally {
-            getServiceRecursion.remove();
+            inProgress.remove(usage);
+            if (outermost)
+                getServiceInProgress.remove();
         }
         return value;
     }
@@ -313,6 +358,10 @@ public final class ServiceManagerImpl implements ServiceManager {
 
         // This event is synchronously delivered before the service has completed unregistering.
         frameworkEvents.fireServiceEvent(serviceOwner, ServiceEvent.UNREGISTERING, serviceState);
+
+        // Once delivery of the event is complete, the service objects cannot be obtained any more
+        if (serviceState instanceof ServiceStateImpl)
+            ((ServiceStateImpl<?>) serviceState).setReleased();
 
         // Remove from using bundles
         for (XBundle bundle : serviceState.getUsingBundlesInternal()) {
@@ -354,37 +403,40 @@ public final class ServiceManagerImpl implements ServiceManager {
      */
     private List<ServiceState<?>> processFindHooks(XBundle bundle, String clazz, String filterStr, boolean checkAssignable, List<ServiceState<?>> serviceStates) {
 
-        if (serviceStates.isEmpty())
-            return serviceStates;
-
+        // The hooks are also called when nothing was found
         List<ServiceState<?>> hookRefs = getServiceReferencesInternal(bundle, FindHook.class.getName(), NoFilter.INSTANCE, true);
         if (hookRefs.isEmpty())
             return serviceStates;
 
-        // Event and Find Hooks can not be used to hide the services from the framework.
-        if (clazz != null && clazz.startsWith(FindHook.class.getPackage().getName()))
+        // Event and Find Hooks can not be used to hide the services from the framework, which looks up the hooks
+        // of the framework
+        if (clazz != null && clazz.startsWith("org.osgi.framework.hooks."))
             return serviceStates;
 
         // The order in which the find hooks are called is the reverse compareTo ordering of
         // their ServiceReferences. That is, the service with the highest ranking number must be called first.
-        List<ServiceReference<?>> sortedHookRefs = new ArrayList<ServiceReference<?>>(hookRefs);
+        List<ServiceState<?>> sortedHookRefs = new ArrayList<ServiceState<?>>(hookRefs);
         Collections.reverse(sortedHookRefs);
-
-        List<FindHook> hooks = new ArrayList<FindHook>();
-        BundleContext context = bundle.getBundleContext();
-        for (ServiceReference<?> hookRef : sortedHookRefs)
-            hooks.add((FindHook) context.getService(hookRef));
 
         Collection<ServiceReference<?>> hookParam = new ArrayList<ServiceReference<?>>();
         for (ServiceState<?> aux : serviceStates)
-            hookParam.add(aux.getReference());
+            hookParam.add(ServiceStateImpl.getReferenceInternal(aux));
 
+        // The hooks are obtained by the framework and released after the call, they are called with the context of the
+        // bundle that searches the registry
+        BundleContext context = bundle.getBundleContext();
+        XBundle hookUser = getHookUser(bundle);
         hookParam = new RemoveOnlyCollection<ServiceReference<?>>(hookParam);
-        for (FindHook hook : hooks) {
-            try {
-                hook.find(context, clazz, filterStr, !checkAssignable, hookParam);
-            } catch (Exception ex) {
-                LOGGER.warnErrorWhileCallingFindHook(ex, hook);
+        for (ServiceState<?> hookRef : sortedHookRefs) {
+            Object hook = getService(hookUser, hookRef);
+            if (hook instanceof FindHook) {
+                try {
+                    ((FindHook) hook).find(context, clazz, filterStr, !checkAssignable, hookParam);
+                } catch (Exception ex) {
+                    LOGGER.warnErrorWhileCallingFindHook(ex, (FindHook) hook);
+                } finally {
+                    ungetService(hookUser, hookRef);
+                }
             }
         }
 

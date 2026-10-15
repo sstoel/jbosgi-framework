@@ -38,6 +38,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import org.jboss.logging.Logger.Level;
 import org.jboss.modules.ModuleIdentifier;
@@ -91,6 +92,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
     private final AtomicBoolean alreadyStarting = new AtomicBoolean();
     private final AtomicBoolean awaitLazyActivation = new AtomicBoolean();
+    // A class was loaded from the bundle before it was started with its lazy activation policy
+    private final AtomicBoolean classLoadedBeforeLazyStart = new AtomicBoolean();
     private final AtomicInteger revisionIndex = new AtomicInteger();
     private final List<UserBundleRevision> revisions = new ArrayList<UserBundleRevision>();
 
@@ -136,10 +139,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return getOSGiMetaData().isSingleton();
     }
 
+    /**
+     * A bundle awaits its lazy activation only once it was started with its declared activation policy (STARTING),
+     * not because its manifest declares a lazy policy
+     */
     void initLazyActivation() {
-        if (!isFragment()) {
-            awaitLazyActivation.set(isActivationLazy());
-        }
+        awaitLazyActivation.set(false);
     }
 
     boolean isActivationLazy() {
@@ -156,13 +161,17 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return awaitLazyActivation.get();
     }
 
+    // A class that would trigger the lazy activation is loaded while the bundle does not await its activation
+    void lazyClassLoaded() {
+        if (awaitLazyActivation.get() == false && isActivationLazy())
+            classLoadedBeforeLazyStart.set(true);
+    }
+
     void activateLazily() throws BundleException {
-        if (awaitLazyActivation.getAndSet(false)) {
+        if (getState() == STARTING && awaitLazyActivation.getAndSet(false)) {
             if (startLevelValidForStart() == true) {
+                // The declared activation policy was applied when the bundle was started, the trigger activates it
                 int options = START_TRANSIENT;
-                if (isBundleActivationPolicyUsed()) {
-                    options |= START_ACTIVATION_POLICY;
-                }
                 LOGGER.debugf("Lazy activation of: %s", this);
                 getBundleManager().startBundleLifecycle(this, options);
             }
@@ -259,7 +268,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     }
 
     @Override
-    void updateInternal(InputStream input) throws BundleException {
+    boolean updateInternal(InputStream input) throws BundleException {
 
         LOGGER.debugf("Updating bundle: %s", this);
 
@@ -276,15 +285,17 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             }
         }
 
-        changeState(Bundle.INSTALLED, BundleEvent.UNRESOLVED);
-
         // If the Framework is unable to install the updated version of this bundle, the original
         // version of this bundle must be restored and a BundleException must be thrown after
-        // completion of the remaining steps.
+        // completion of the remaining steps. The state changes only when the update revision exists.
         UserBundleRevision currentRev = getBundleRevision();
         try {
             // Create the update revision
             createUpdateRevision(input);
+
+            // The bundle is INSTALLED with its new revision, a resolved bundle is unresolved
+            boolean wasResolved = getState() != Bundle.INSTALLED;
+            changeState(Bundle.INSTALLED, wasResolved ? BundleEvent.UNRESOLVED : 0);
 
             // Make the {@link BundleWiring} for the old {@link BundleRevision} uneffective
             currentRev.getWiringSupport().makeUneffective();
@@ -303,19 +314,13 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         FrameworkEvents eventsPlugin = getFrameworkState().getFrameworkEvents();
         eventsPlugin.fireBundleEvent(this, BundleEvent.UPDATED);
 
-        if (restart) {
-            // If this bundle's state was originally ACTIVE or STARTING, the updated bundle is started
-            // If Bundle.start throws an exception, a Framework event of type FrameworkEvent.ERROR is fired
-            try {
-                getBundleManager().startBundle(this, Bundle.START_TRANSIENT);
-            } catch (BundleException e) {
-                eventsPlugin.fireFrameworkEvent(this, FrameworkEvent.ERROR, e);
-            }
-        }
-
         updateLastModified();
 
         LOGGER.infoBundleUpdated(this);
+
+        // If this bundle's state was originally ACTIVE or STARTING, the updated bundle is started like with Bundle.start,
+        // through the bundle lifecycle: an integration may have to activate the deployment of the new revision
+        return restart;
     }
 
     /**
@@ -432,7 +437,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
             refreshPolicy.refreshCurrentRevision(currentRev);
 
-            changeState(Bundle.INSTALLED);
+            // The integration may have resolved the new revision already, when other modules need its module
+            XBundleRevision newRev = getBundleRevision();
+            changeState(newRev != currentRev && newRev.getWiring() != null ? Bundle.RESOLVED : Bundle.INSTALLED);
         } finally {
             refreshPolicy.endBundleRefresh(this);
         }
@@ -485,9 +492,14 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         changeState(Bundle.UNINSTALLED, 0);
 
         // #5 This bundle and any persistent storage area provided for this bundle by the Framework are removed
+        // The content of a revision that is still in use stays open until the revision is removed (removal pending)
         if ((options & Bundle.STOP_TRANSIENT) == 0) {
             StorageManager storagePlugin = getFrameworkState().getStorageManager();
-            storagePlugin.deleteStorageState(getStorageState());
+            if (activeWires && storagePlugin instanceof StorageManagerImpl) {
+                ((StorageManagerImpl) storagePlugin).deleteStorageState(getStorageState(), false);
+            } else {
+                storagePlugin.deleteStorageState(getStorageState());
+            }
         }
 
         // Remove the bundle from the {@link Environment}
@@ -560,14 +572,14 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
     private void startInternalNow(int options) throws BundleException {
 
-        // #2 If this bundle's state is ACTIVE then this method returns immediately.
+        // #2 Set this bundle's autostart setting, also for a bundle that is ACTIVE already
+        persistAutoStartSettings(options);
+
+        // #3 If this bundle's state is ACTIVE then this method returns immediately.
         if (getState() == ACTIVE)
             return;
 
         LOGGER.debugf("Starting bundle: %s", this);
-
-        // #3 Set this bundle's autostart setting
-        persistAutoStartSettings(options);
 
         // If the Framework's current start level is less than this bundle's start level
         if (startLevelValidForStart() == false) {
@@ -592,7 +604,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
         // #5 If the START_ACTIVATION_POLICY option is set and this bundle's declared activation policy is lazy
         boolean useActivationPolicy = (options & START_ACTIVATION_POLICY) != 0;
-        if (awaitLazyActivation.get() == true && useActivationPolicy == true) {
+        // A bundle from which a class was loaded already is activated right away, the class load cannot trigger it any more
+        if (isActivationLazy() && useActivationPolicy && classLoadedBeforeLazyStart.getAndSet(false) == false) {
 
             // #5.1 If this bundle's state is STARTING then this method returns immediately.
             if (getState() == STARTING)
@@ -600,9 +613,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
             // #5.2 This bundle's state is set to STARTING.
             // #5.3 A bundle event of type BundleEvent.LAZY_ACTIVATION is fired
+            // The bundle now awaits its activation by the first class load (4.4.6.2)
+            awaitLazyActivation.set(true);
             changeState(STARTING, BundleEvent.LAZY_ACTIVATION);
             return;
         }
+        awaitLazyActivation.set(false);
 
         // #6 This bundle's state is set to STARTING.
         // #7 A bundle event of type BundleEvent.STARTING is fired.
@@ -616,7 +632,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         String className = getOSGiMetaData().getBundleActivator();
         if (className != null) {
             try {
-                bundleActivator = getDeployment().getAttachment(IntegrationConstants.BUNDLE_ACTIVATOR_KEY);
+                // Every start gets a new activator object (4.4.6), from the factory of an integration if there is one
+                Supplier<BundleActivator> activatorFactory = getDeployment().getAttachment(IntegrationConstants.BUNDLE_ACTIVATOR_FACTORY_KEY);
+                bundleActivator = activatorFactory != null ? activatorFactory.get() : getDeployment().getAttachment(IntegrationConstants.BUNDLE_ACTIVATOR_KEY);
                 if (bundleActivator == null) {
                     Object result = loadClass(className).newInstance();
                     if (result instanceof BundleActivator) {
@@ -646,7 +664,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
                 // #8.6 This bundle's state is set to RESOLVED
                 // #8.7 A bundle event of type BundleEvent.STOPPED is fired
-                changeState(Bundle.RESOLVED);
+                changeState(Bundle.RESOLVED, BundleEvent.STOPPED);
 
                 // #8.8 A BundleException is then thrown
                 if (th instanceof BundleException)
@@ -685,6 +703,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         LOGGER.debugf("Stopping bundle: %s", this);
 
         int priorState = getState();
+
+        // A stopped bundle does not await its lazy activation any more
+        awaitLazyActivation.set(false);
 
         // #3 If the STOP_TRANSIENT option is not set then then set this bundle's persistent autostart setting to Stopped.
         // When the Framework is restarted and this bundle's autostart setting is Stopped, this bundle must not be
@@ -838,10 +859,6 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return false;
     }
 
-    private boolean isBundleActivationPolicyUsed() {
-        StorageState storageState = getStorageState();
-        return storageState.isBundleActivationPolicyUsed();
-    }
 
     private void removeServicesAndListeners() {
         // Any services registered by this bundle must be unregistered.
@@ -852,8 +869,13 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         getBundleServices().release(this, serviceManager, eventsPlugin);
     }
 
+    // Every revision of the bundle counts, after an update the old revision may be in use while the current one is not
     private boolean hasActiveWiresWhileUninstalling() {
-        BundleWiring wiring = getBundleWiring();
-        return (wiring != null ? ((AbstractBundleWiring) wiring).isInUseForUninstall() : false);
+        for (XBundleRevision brev : getAllBundleRevisions()) {
+            BundleWiring wiring = brev.getWiringSupport().getWiring(false);
+            if (wiring instanceof AbstractBundleWiring && ((AbstractBundleWiring) wiring).isInUseForUninstall())
+                return true;
+        }
+        return false;
     }
 }
