@@ -58,7 +58,7 @@ public class SystemBundleTestCase extends OSGiFrameworkTest {
 
     @Test
     public void testLocation() throws Exception {
-        assertEquals(Constants.JBOSGI_FRAMEWORK_LOCATION, getFramework().getLocation());
+        assertEquals(Constants.SYSTEM_BUNDLE_LOCATION, getFramework().getLocation());
     }
 
     @Test
@@ -80,7 +80,8 @@ public class SystemBundleTestCase extends OSGiFrameworkTest {
     @SuppressWarnings("rawtypes")
     public void testGetHeaders() throws Exception {
         Dictionary dictionary = getFramework().getHeaders();
-        assertEquals(Constants.SYSTEM_BUNDLE_SYMBOLICNAME, dictionary.get(Constants.BUNDLE_SYMBOLICNAME));
+        // The implementation name, system.bundle is an alias of it (3.9.1)
+        assertEquals(Constants.JBOSGI_FRAMEWORK_SYMBOLIC_NAME, dictionary.get(Constants.BUNDLE_SYMBOLICNAME));
     }
 
     @Test

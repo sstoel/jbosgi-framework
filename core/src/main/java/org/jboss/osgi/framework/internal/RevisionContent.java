@@ -155,7 +155,7 @@ final class RevisionContent implements EntriesProvider {
             if (MultiReleaseSupport.isVersionedPath(path)) {
                 for (VirtualFile versionedRoot : versionedRoots) {
                     VirtualFile child = versionedRoot.getChild(path);
-                    if (child != null)
+                    if (child != null && isBelowRoot(child))
                         return getBundleURL(child);
                 }
             }
@@ -172,7 +172,8 @@ final class RevisionContent implements EntriesProvider {
         VirtualFile child;
         try {
             child = virtualFile.getChild(path);
-            return child != null ? getBundleURL(child) : null;
+            // A path that leaves the root, e.g. through "..", is not an entry of the bundle
+            return child != null && isBelowRoot(child) ? getBundleURL(child) : null;
         } catch (IOException ex) {
             LOGGER.errorCannotGetEntry(ex, path, userRev);
             return null;
@@ -231,10 +232,22 @@ final class RevisionContent implements EntriesProvider {
         Vector<URL> result = new Vector<URL>();
         while (urls.hasMoreElements()) {
             VirtualFile child = AbstractVFS.toVirtualFile(urls.nextElement());
-            result.add(getBundleURL(child));
+            if (isBelowRoot(child))
+                result.add(getBundleURL(child));
         }
 
-        return result.elements();
+        return result.isEmpty() ? null : result.elements();
+    }
+
+    /**
+     * True if the file is the root of the content or below it
+     */
+    private boolean isBelowRoot(VirtualFile child) {
+        String rootPath = virtualFile.getPathName();
+        String childPath = child.getPathName();
+        if (childPath.startsWith(rootPath) == false)
+            return false;
+        return rootPath.isEmpty() || childPath.length() == rootPath.length() || rootPath.endsWith("/") || childPath.charAt(rootPath.length()) == '/';
     }
 
     /**

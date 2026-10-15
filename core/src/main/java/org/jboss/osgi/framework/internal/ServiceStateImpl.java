@@ -163,6 +163,18 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         return (ServiceStateImpl) sref;
     }
 
+    /**
+     * The service state of a reference of the framework that the given service manager belongs to
+     *
+     * @throws IllegalArgumentException if the reference was not created by that framework
+     */
+    static ServiceStateImpl assertServiceState(ServiceReference sref, ServiceManager serviceManager) {
+        ServiceReference aux = sref instanceof ServiceReferenceWrapper ? ((ServiceReferenceWrapper) sref).getServiceState() : sref;
+        if (aux instanceof ServiceStateImpl == false || ((ServiceStateImpl) aux).serviceManager != serviceManager)
+            throw MESSAGES.illegalArgumentInvalidServiceRef(sref);
+        return (ServiceStateImpl) aux;
+    }
+
     @Override
     public long getServiceId() {
         return serviceId;
@@ -322,8 +334,9 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         synchronized (this) {
             Map<S, Integer> values = prototypeValues != null ? prototypeValues.get(bundle.getBundleId()) : null;
             Integer useCount = values != null ? values.get(value) : null;
+            // The unregistration of the service releases the objects, a release that comes too late is done already
             if (useCount == null)
-                return false;
+                return isUnregistered() || released || prototypeValuesReleased;
 
             // The factory gets the service object back when the bundle no longer uses it
             if (useCount > 1) {
@@ -560,6 +573,11 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         if (className == null)
             throw MESSAGES.illegalArgumentNull("className");
 
+        // A bundle of another framework
+        if (bundle instanceof AbstractBundleState && ownerBundle instanceof AbstractBundleState
+                && ((AbstractBundleState) bundle).getBundleManager() != ((AbstractBundleState) ownerBundle).getBundleManager())
+            throw MESSAGES.illegalArgumentForeignBundle(bundle);
+
         if (bundle == ownerBundle || className.startsWith("java."))
             return true;
 
@@ -683,6 +701,8 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     public int compareTo(Object sref) {
         if (sref instanceof ServiceReference == false)
             throw MESSAGES.illegalArgumentInvalidServiceRef(sref);
+        // A reference of another framework cannot be compared
+        assertServiceState((ServiceReference) sref, serviceManager);
 
         Comparator<ServiceReference<?>> comparator = ServiceReferenceComparator.getInstance();
         return comparator.compare(this, (ServiceReference) sref);

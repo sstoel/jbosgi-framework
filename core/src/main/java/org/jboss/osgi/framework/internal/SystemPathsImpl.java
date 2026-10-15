@@ -144,14 +144,39 @@ public final class SystemPathsImpl implements SystemPaths {
     static Set<String> getDefaultSystemPackages() {
         Set<String> runtimePackages = getRuntimePackages();
         Set<String> result = new LinkedHashSet<String>(getRuntimeJavaPackages());
+        Set<String> listedPackages = new HashSet<String>();
         for (String packageSpec : SystemPaths.DEFAULT_SYSTEM_PACKAGES) {
             // The java.* packages are taken from the running Java platform.
             // The other packages are only exported when the running Java platform has them,
             // a package that comes from the class path instead is configured as an extra system package.
-            if (!packageSpec.startsWith("java.") && runtimePackages.contains(packageName(packageSpec)))
+            if (!packageSpec.startsWith("java.") && runtimePackages.contains(packageName(packageSpec))) {
                 result.add(packageSpec);
+                listedPackages.add(packageName(packageSpec));
+            }
+        }
+        // Every package of the Java SE platform, also the ones that a newer platform adds (javax.sound, javax.smartcardio)
+        for (String packageName : getPlatformPackages()) {
+            if (!packageName.startsWith("java.") && !listedPackages.contains(packageName))
+                result.add(packageName);
         }
         result.addAll(Arrays.asList(SystemPaths.DEFAULT_FRAMEWORK_PACKAGES));
+        return result;
+    }
+
+    /**
+     * The packages that the java.* modules of the running Java platform (Java SE) export to all modules.
+     */
+    private static Set<String> getPlatformPackages() {
+        Set<String> result = new TreeSet<String>();
+        for (Module module : ModuleLayer.boot().modules()) {
+            ModuleDescriptor descriptor = module.getDescriptor();
+            if (descriptor == null || descriptor.name().startsWith("java.") == false)
+                continue;
+            for (ModuleDescriptor.Exports exports : descriptor.exports()) {
+                if (!exports.isQualified())
+                    result.add(exports.source());
+            }
+        }
         return result;
     }
 

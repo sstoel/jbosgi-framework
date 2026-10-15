@@ -29,10 +29,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.security.cert.X509Certificate;
-import java.util.Collections;
 import java.util.Dictionary;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 
@@ -43,6 +43,7 @@ import org.jboss.osgi.framework.spi.FrameworkBuilder;
 import org.jboss.osgi.framework.spi.FrameworkBuilder.FrameworkPhase;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.ServiceTracker;
+import org.jboss.osgi.framework.spi.StorageState;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleException;
@@ -50,7 +51,6 @@ import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.ServiceReference;
 import org.osgi.framework.Version;
-import org.osgi.framework.connect.ModuleConnector;
 import org.osgi.framework.launch.Framework;
 
 /**
@@ -70,7 +70,10 @@ final class FrameworkProxy implements Framework {
     // The thread that stops and restarts the framework for Framework.update
     private volatile Thread updateThread;
     private boolean firstInit;
-    private boolean connectorInitialized;
+    // The headers and the last modification time of the system bundle of the last run, for the Bundle methods of a
+    // framework that is not running (the framework keeps no other state of a run)
+    private volatile Dictionary<String, String> lastHeaders;
+    private volatile long lastModified;
 
     FrameworkProxy(FrameworkBuilder frameworkBuilder) {
         this.frameworkBuilder = frameworkBuilder;
@@ -89,7 +92,7 @@ final class FrameworkProxy implements Framework {
 
     @Override
     public String getLocation() {
-        return Constants.JBOSGI_FRAMEWORK_LOCATION;
+        return Constants.SYSTEM_BUNDLE_LOCATION;
     }
 
     @Override
@@ -131,6 +134,17 @@ final class FrameworkProxy implements Framework {
 
     @Override
     public void init(final FrameworkListener... frameworkListeners) throws BundleException {
+        // An interrupt of the caller that predates the call does not fail the init, the caller keeps its status
+        boolean interrupted = Thread.interrupted();
+        try {
+            initInternal(frameworkListeners);
+        } finally {
+            if (interrupted)
+                Thread.currentThread().interrupt();
+        }
+    }
+
+    private void initInternal(final FrameworkListener... frameworkListeners) throws BundleException {
         awaitUpdate();
 
         // This method does nothing if called when this Framework is in the STARTING, ACTIVE or STOPPING state
@@ -151,13 +165,7 @@ final class FrameworkProxy implements Framework {
             bundleManager = (BundleManagerPlugin) frameworkBuilder.createFrameworkServices(serviceContainer, firstInit);
             bundleManager.setManagerState(Bundle.STARTING);
 
-            // The module connector is initialized once, before it is used for anything else
-            ModuleConnector connector = frameworkBuilder.getModuleConnector();
-            if (connector != null && connectorInitialized == false) {
-                connectorInitialized = true;
-                File storage = new File((String) bundleManager.getProperty(Constants.FRAMEWORK_STORAGE));
-                connector.initialize(storage, Collections.unmodifiableMap(new HashMap<String, String>(frameworkBuilder.getProperties())));
-            }
+            // The module connector is initialized by the storage manager, once the storage area was cleaned
 
             ServiceTracker serviceTracker = new ServiceTracker("Framework.init");
             frameworkBuilder.installServices(FrameworkPhase.CREATE, serviceTarget, serviceTracker);
@@ -169,6 +177,8 @@ final class FrameworkProxy implements Framework {
             }
 
             bundleManager.setFramework(this);
+            // The headers of the system bundle stay available when the framework is not running
+            getRunningSystemBundle();
 
             if (frameworkListeners != null) {
                 for (FrameworkListener listener : frameworkListeners) {
@@ -202,6 +212,8 @@ final class FrameworkProxy implements Framework {
             // The bundle manager is not available when the framework services cannot be created
             if (bundleManager != null)
                 bundleManager.setManagerState(Bundle.INSTALLED);
+            if (ex instanceof InterruptedException)
+                Thread.currentThread().interrupt();
             throw MESSAGES.cannotInitializeFramework(ex);
         } finally {
             firstInit = false;
@@ -230,11 +242,21 @@ final class FrameworkProxy implements Framework {
      */
     @Override
     public void start(int options) throws BundleException {
+        boolean interrupted = Thread.interrupted();
+        try {
+            startInternal(options);
+        } finally {
+            if (interrupted)
+                Thread.currentThread().interrupt();
+        }
+    }
+
+    private void startInternal(int options) throws BundleException {
         awaitUpdate();
 
         // If this Framework is not in the STARTING state, initialize this Framework
         if (getState() != Bundle.STARTING)
-            init();
+            initInternal(new FrameworkListener[0]);
 
         LOGGER.debugf("Start framework");
         try {
@@ -252,6 +274,8 @@ final class FrameworkProxy implements Framework {
         } catch (BundleException ex) {
             throw ex;
         } catch (Throwable ex) {
+            if (ex instanceof InterruptedException)
+                Thread.currentThread().interrupt();
             throw MESSAGES.cannotStartFramework(ex);
         }
     }
@@ -280,9 +304,16 @@ final class FrameworkProxy implements Framework {
     public void stop(int options) throws BundleException {
         // Returns immediately, the framework stops on another thread. A framework that is updated is stopped
         // after it was started again.
-        awaitUpdate();
-        if (bundleManager != null)
-            bundleManager.stopFramework(FrameworkEvent.STOPPED, null);
+        boolean interrupted = Thread.interrupted();
+        try {
+            awaitUpdate();
+            getRunningSystemBundle();
+            if (bundleManager != null)
+                bundleManager.stopFramework(FrameworkEvent.STOPPED, null);
+        } finally {
+            if (interrupted)
+                Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -372,76 +403,79 @@ final class FrameworkProxy implements Framework {
         return bundleManager != null ? bundleManager.getManagerState() : Bundle.INSTALLED;
     }
 
+    // The Bundle methods of the framework answer also when it is not running (before init and after stop): from the
+    // last run, from the class loader of the framework implementation, or with no result
+
     @Override
     public Dictionary<String, String> getHeaders() {
-        assertNotStopped();
-        return getSystemBundle().getHeaders();
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getHeaders() : getLastHeaders();
     }
 
     @Override
     public ServiceReference<?>[] getRegisteredServices() {
-        assertNotStopped();
-        return getSystemBundle().getRegisteredServices();
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getRegisteredServices() : null;
     }
 
     @Override
     public ServiceReference<?>[] getServicesInUse() {
-        assertNotStopped();
-        return getSystemBundle().getServicesInUse();
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getServicesInUse() : null;
     }
 
     @Override
     public boolean hasPermission(Object permission) {
-        assertNotStopped();
-        return getSystemBundle().hasPermission(permission);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.hasPermission(permission) : permission instanceof java.security.Permission;
     }
 
     @Override
     public URL getResource(String name) {
-        assertNotStopped();
-        return getSystemBundle().getResource(name);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getResource(name) : getFrameworkClassLoader().getResource(name);
     }
 
     @Override
     public Dictionary<String, String> getHeaders(String locale) {
-        assertNotStopped();
-        return getSystemBundle().getHeaders(locale);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getHeaders(locale) : getLastHeaders();
     }
 
     @Override
     public Class<?> loadClass(String name) throws ClassNotFoundException {
-        assertNotStopped();
-        return getSystemBundle().loadClass(name);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.loadClass(name) : getFrameworkClassLoader().loadClass(name);
     }
 
     @Override
     public Enumeration<URL> getResources(String name) throws IOException {
-        assertNotStopped();
-        return getSystemBundle().getResources(name);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getResources(name) : getFrameworkClassLoader().getResources(name);
     }
 
     @Override
     public Enumeration<String> getEntryPaths(String path) {
-        assertNotStopped();
-        return getSystemBundle().getEntryPaths(path);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getEntryPaths(path) : null;
     }
 
     @Override
     public URL getEntry(String path) {
-        assertNotStopped();
-        return getSystemBundle().getEntry(path);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getEntry(path) : null;
     }
 
     @Override
     public long getLastModified() {
-        assertNotStopped();
-        return getSystemBundle().getLastModified();
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.getLastModified() : lastModified;
     }
 
     @Override
     public Enumeration<URL> findEntries(String path, String filePattern, boolean recurse) {
-        assertNotStopped();
-        return getSystemBundle().findEntries(path, filePattern, recurse);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        return systemBundle != null ? systemBundle.findEntries(path, filePattern, recurse) : null;
     }
 
     @Override
@@ -461,9 +495,36 @@ final class FrameworkProxy implements Framework {
         return bundleManager == null || bundleManager.hasStopped();
     }
 
-    private void assertNotStopped() {
-        if (hasStopped())
-            throw MESSAGES.illegalStateFrameworkAlreadyStopped();
+    // The system bundle of the running framework, or null
+    private SystemBundleState getRunningSystemBundle() {
+        BundleManagerPlugin manager = bundleManager;
+        if (manager == null || manager.hasStopped())
+            return null;
+        SystemBundleState systemBundle = manager.getSystemBundle();
+        if (systemBundle != null) {
+            lastHeaders = new Hashtable<String, String>(toMap(systemBundle.getHeaders()));
+            lastModified = systemBundle.getLastModified();
+        }
+        return systemBundle;
+    }
+
+    private static Map<String, String> toMap(Dictionary<String, String> dictionary) {
+        Map<String, String> result = new HashMap<String, String>();
+        for (Enumeration<String> keys = dictionary.keys(); keys.hasMoreElements();) {
+            String key = keys.nextElement();
+            result.put(key, dictionary.get(key));
+        }
+        return result;
+    }
+
+    private Dictionary<String, String> getLastHeaders() {
+        Dictionary<String, String> headers = lastHeaders;
+        return headers != null ? new Hashtable<String, String>(toMap(headers)) : new Hashtable<String, String>();
+    }
+
+    private static ClassLoader getFrameworkClassLoader() {
+        ClassLoader classLoader = FrameworkProxy.class.getClassLoader();
+        return classLoader != null ? classLoader : ClassLoader.getSystemClassLoader();
     }
 
     private SystemBundleState getSystemBundle() {
@@ -474,8 +535,14 @@ final class FrameworkProxy implements Framework {
 
     @Override
     public File getDataFile(String filename) {
-        assertNotStopped();
-        return getSystemBundle().getDataFile(filename);
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        if (systemBundle != null)
+            return systemBundle.getDataFile(filename);
+        // The data area of the system bundle in the storage area, which does not depend on a running framework
+        String storage = frameworkBuilder.getProperties().get(Constants.FRAMEWORK_STORAGE);
+        File storageArea = new File(storage != null ? storage : StorageManagerImpl.getDefaultStorageArea()).getAbsoluteFile();
+        File dataArea = new File(new File(storageArea, StorageState.BUNDLE_DIRECTORY_PREFIX + "0"), StorageManagerImpl.DATA_DIRECTORY);
+        return new File(dataArea, filename);
     }
 
     @Override

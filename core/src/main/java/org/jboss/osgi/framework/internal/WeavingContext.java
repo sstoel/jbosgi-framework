@@ -24,6 +24,7 @@ package org.jboss.osgi.framework.internal;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
 import java.security.ProtectionDomain;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -36,13 +37,16 @@ import java.util.Map;
 import java.util.Set;
 
 import org.jboss.osgi.framework.spi.FrameworkEvents;
+import org.jboss.osgi.metadata.OSGiMetaDataBuilder;
 import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
+import org.jboss.osgi.resolver.XBundleRevisionBuilderFactory;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.framework.ServiceReference;
+import org.osgi.framework.Version;
 import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
 import org.osgi.framework.hooks.weaving.WovenClassListener;
@@ -64,7 +68,7 @@ class WeavingContext {
     private final XBundleRevision hostRev;
     private final WeavingContext parent;
     private final List<HookRegistration> weavingHooks;
-    private final List<String> weavingImports = new ArrayList<String>();
+    private final List<String> weavingImports = new DynamicImportList();
     private Map<String, ContextClass> wovenClasses = new HashMap<String, ContextClass>();
 
     static WeavingContext getCurrentContext() {
@@ -90,11 +94,13 @@ class WeavingContext {
         BundleManagerPlugin bundleManager = hostState.getBundleManager();
         BundleContext syscontext = bundleManager.getSystemContext();
 
-        // Cleanup the blacklist
-        for (Iterator<ServiceReference<WeavingHook>> iterator = blacklist.iterator(); iterator.hasNext();) {
-            ServiceReference<WeavingHook> sref = iterator.next();
-            if (syscontext.getService(sref) == null) {
-                iterator.remove();
+        // Cleanup the blacklist: the hooks that are unregistered, also those of a framework that was stopped
+        synchronized (blacklist) {
+            for (Iterator<ServiceReference<WeavingHook>> iterator = blacklist.iterator(); iterator.hasNext();) {
+                ServiceReference<WeavingHook> sref = iterator.next();
+                if (ServiceStateImpl.assertServiceState(sref).isUnregistered()) {
+                    iterator.remove();
+                }
             }
         }
 
@@ -113,9 +119,15 @@ class WeavingContext {
         // Get the hook instances and associate them with the current thread
         weavingHooks = new ArrayList<HookRegistration>();
         for (ServiceReference<WeavingHook> sref : sorted) {
-            if (blacklist.contains(sref) == false) {
+            boolean blacklisted;
+            synchronized (blacklist) {
+                blacklisted = blacklist.contains(sref);
+            }
+            if (blacklisted == false) {
+                // A hook that cannot be obtained (its factory returned null, it was unregistered) is skipped
                 WeavingHook hook = syscontext.getService(sref);
-                weavingHooks.add(new HookRegistration(sref, hook));
+                if (hook != null)
+                    weavingHooks.add(new HookRegistration(sref, hook));
             }
         }
     }
@@ -125,7 +137,9 @@ class WeavingContext {
     }
 
     void blacklist(ServiceReference<WeavingHook> sref) {
-        blacklist.add(sref);
+        synchronized (blacklist) {
+            blacklist.add(sref);
+        }
     }
 
     synchronized ContextClass createContextClass(String className, Class<?> redefinedClass, ProtectionDomain protectionDomain, byte[] classfileBuffer) {
@@ -174,11 +188,21 @@ class WeavingContext {
 
         @Override
         public byte[] getBytes() {
+            // After TRANSFORMING every call returns a new copy, the class is defined from the internal array
+            return frozen ? classfileBuffer.clone() : classfileBuffer;
+        }
+
+        /**
+         * The bytes the class is defined from
+         */
+        byte[] getDefineBytes() {
             return classfileBuffer;
         }
 
         @Override
         public void setBytes(byte[] newBytes) {
+            if (newBytes == null)
+                throw new NullPointerException("newBytes");
             assertNotFrozen();
             this.classfileBuffer = newBytes;
         }
@@ -296,6 +320,53 @@ class WeavingContext {
         private void assertNotFrozen() {
             if (frozen)
                 throw MESSAGES.illegalStateWeavingAlreadyComplete(className);
+        }
+    }
+
+    /**
+     * The dynamic imports of the woven classes: a clause that is not a valid DynamicImport-Package clause is rejected
+     * with an IllegalArgumentException when it is added (56.6.4.10)
+     */
+    private static final class DynamicImportList extends AbstractList<String> {
+
+        private final List<String> delegate = new ArrayList<String>();
+
+        @Override
+        public String get(int index) {
+            return delegate.get(index);
+        }
+
+        @Override
+        public int size() {
+            return delegate.size();
+        }
+
+        @Override
+        public void add(int index, String element) {
+            delegate.add(index, validate(element));
+        }
+
+        @Override
+        public String set(int index, String element) {
+            return delegate.set(index, validate(element));
+        }
+
+        @Override
+        public String remove(int index) {
+            return delegate.remove(index);
+        }
+
+        private static String validate(String importSpec) {
+            if (importSpec == null)
+                throw MESSAGES.illegalArgumentNull("importSpec");
+            try {
+                OSGiMetaDataBuilder mdbuilder = OSGiMetaDataBuilder.createBuilder("woven.class", Version.emptyVersion);
+                mdbuilder.addDynamicImportPackages(importSpec);
+                XBundleRevisionBuilderFactory.create().loadFrom(mdbuilder.getOSGiMetaData()).getResource();
+            } catch (RuntimeException rte) {
+                throw MESSAGES.illegalArgumentDynamicWeavingImport(rte, importSpec);
+            }
+            return importSpec;
         }
     }
 }

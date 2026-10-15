@@ -24,7 +24,6 @@ package org.jboss.osgi.framework.internal;
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 import static org.jboss.osgi.framework.internal.InternalConstants.NATIVE_LIBRARY_METADATA_KEY;
-import static org.osgi.framework.Constants.SYSTEM_BUNDLE_SYMBOLICNAME;
 import static org.osgi.framework.Constants.VISIBILITY_REEXPORT;
 
 import java.io.File;
@@ -62,7 +61,6 @@ import org.jboss.osgi.framework.spi.FrameworkModuleLoader.ModuleSpecBuilderConte
 import org.jboss.osgi.framework.spi.FrameworkModuleProvider;
 import org.jboss.osgi.framework.spi.IntegrationConstants;
 import org.jboss.osgi.framework.spi.ModuleManager;
-import org.jboss.osgi.framework.spi.NativeLibraryProvider;
 import org.jboss.osgi.framework.spi.SystemPaths;
 import org.jboss.osgi.metadata.ActivationPolicyMetaData;
 import org.jboss.osgi.metadata.NativeLibrary;
@@ -71,7 +69,6 @@ import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.jboss.osgi.resolver.XCapability;
 import org.jboss.osgi.resolver.XEnvironment;
-import org.jboss.osgi.resolver.XIdentityCapability;
 import org.jboss.osgi.resolver.XIdentityRequirement;
 import org.jboss.osgi.resolver.XPackageCapability;
 import org.jboss.osgi.resolver.XPackageRequirement;
@@ -128,11 +125,11 @@ public final class ModuleManagerImpl implements ModuleManager {
         if (identifier != null)
             return identifier;
 
-        XIdentityCapability icap = brev.getIdentityCapability();
         Module module = brev.getAttachment(InternalConstants.MODULE_KEY);
         if (module != null) {
             identifier = module.getIdentifier();
-        } else if (SYSTEM_BUNDLE_SYMBOLICNAME.equals(icap.getName())) {
+        } else if (brev instanceof SystemBundleRevision) {
+            // The system bundle is recognized by identity, a user bundle may use its symbolic name
             identifier = getFrameworkModule().getIdentifier();
         } else {
             identifier = moduleLoader.getModuleIdentifier(brev);
@@ -211,8 +208,7 @@ public final class ModuleManagerImpl implements ModuleManager {
         }
 
         ModuleIdentifier identifier;
-        XIdentityCapability icap = brev.getIdentityCapability();
-        if (SYSTEM_BUNDLE_SYMBOLICNAME.equals(icap.getName())) {
+        if (brev instanceof SystemBundleRevision) {
             identifier = getFrameworkModule().getIdentifier();
         } else {
             HostBundleRevision hostRev = HostBundleRevision.assertHostRevision(brev);
@@ -588,22 +584,21 @@ public final class ModuleManagerImpl implements ModuleManager {
     private void addNativeResourceLoader(ModuleSpec.Builder specBuilder, HostBundleRevision hostrev, Deployment deployment) {
         NativeLibraryMetaData libMetaData = deployment.getAttachment(NATIVE_LIBRARY_METADATA_KEY);
         if (libMetaData != null) {
-            NativeResourceLoader nativeLoader = new NativeResourceLoader();
+            // The libraries are found by their file name: the name given to System.loadLibrary is mapped with
+            // System.mapLibraryName and the configured extra extensions
+            List<String> extensions = new ArrayList<String>();
+            Object extensionsProp = hostrev.getBundleState().getBundleManager().getProperty(Constants.FRAMEWORK_LIBRARY_EXTENSIONS);
+            if (extensionsProp != null) {
+                for (String ext : String.valueOf(extensionsProp).split(","))
+                    extensions.add(ext.trim());
+            }
+            NativeResourceLoader nativeLoader = new NativeResourceLoader(extensions);
             for (NativeLibrary library : libMetaData.getNativeLibraries()) {
                 String libpath = library.getLibraryPath();
                 String libfile = new File(libpath).getName();
-                String libname = libfile.substring(0, libfile.lastIndexOf('.'));
-
-                // Add the library provider to the policy
-                NativeLibraryProvider libProvider = new NativeCodeImpl.NativeLibraryProviderImpl(hostrev, libname, libpath);
-                nativeLoader.addNativeLibrary(libProvider);
-
-                // [TODO] why does the TCK use 'Native' to mean 'libNative' ?
-                if (libname.startsWith("lib")) {
-                    libname = libname.substring(3);
-                    libProvider = new NativeCodeImpl.NativeLibraryProviderImpl(hostrev, libname, libpath);
-                    nativeLoader.addNativeLibrary(libProvider);
-                }
+                if (libfile.isEmpty())
+                    continue;
+                nativeLoader.addNativeLibrary(new NativeCodeImpl.NativeLibraryProviderImpl(hostrev, libfile, libpath));
             }
 
             specBuilder.addResourceRoot(ResourceLoaderSpec.createResourceLoaderSpec(nativeLoader));

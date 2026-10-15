@@ -52,8 +52,8 @@ final class NativeNamespaceSupport {
     /**
      * The attributes of the osgi.native capability that the system bundle provides.
      *
-     * The framework and system properties are available to the selection filter of a native code clause.
-     * They are read when the filter is evaluated, like the framework properties themselves.
+     * The other launching properties are attributes of the capability as well (8.7), except the ones in the
+     * osgi.native namespace. They are read when the filter is evaluated, like the framework properties themselves.
      */
     static Map<String, Object> getCapabilityAttributes(final BundleManagerPlugin bundleManager) {
         return new AbstractMap<String, Object>() {
@@ -71,7 +71,9 @@ final class NativeNamespaceSupport {
                 if (NativeNamespace.CAPABILITY_LANGUAGE_ATTRIBUTE.equals(key))
                     return bundleManager.getProperty(Constants.FRAMEWORK_LANGUAGE);
 
-                return key instanceof String ? bundleManager.getProperty((String) key) : null;
+                if (key instanceof String == false || ((String) key).startsWith(NativeNamespace.NATIVE_NAMESPACE + "."))
+                    return null;
+                return bundleManager.getLaunchingProperties().get(key);
             }
 
             private String getStringProperty(String key) {
@@ -87,7 +89,7 @@ final class NativeNamespaceSupport {
             @Override
             public Set<Map.Entry<String, Object>> entrySet() {
                 Map<String, Object> snapshot = new HashMap<String, Object>();
-                for (String key : bundleManager.getProperties().keySet())
+                for (String key : bundleManager.getLaunchingProperties().keySet())
                     putIfPresent(snapshot, key);
                 putIfPresent(snapshot, NativeNamespace.CAPABILITY_OSNAME_ATTRIBUTE);
                 putIfPresent(snapshot, NativeNamespace.CAPABILITY_PROCESSOR_ATTRIBUTE);

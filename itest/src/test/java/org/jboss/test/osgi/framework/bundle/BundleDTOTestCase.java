@@ -332,8 +332,8 @@ public class BundleDTOTestCase extends OSGiFrameworkTest {
             bundle.start();
             bundle.update(toInputStream(archive));
 
-            // The wiring of the old revision is no longer in use
-            assertEquals(2, bundle.adapt(BundleRevisionDTO[].class).length);
+            // The old revision is not in use, it is removed by the update. Only revisions in use are left (removal pending)
+            assertEquals(1, bundle.adapt(BundleRevisionDTO[].class).length);
             BundleWiringDTO[] dtos = bundle.adapt(BundleWiringDTO[].class);
             assertNotNull(dtos);
             assertEquals(1, dtos.length);

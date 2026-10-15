@@ -167,6 +167,7 @@ final class FrameworkResolverImpl implements XResolver {
         }
 
         ResolverHookProcessor hookregs = new ResolverHookProcessor(syscontext, bundleManager.getBundles(Bundle.INSTALLED));
+        boolean hooksEnded = false;
         try {
             // Recreate the {@link ResolveContext} with filtered resources
             if (hookregs.hasResolverHooks()) {
@@ -222,6 +223,12 @@ final class FrameworkResolverImpl implements XResolver {
             LockContext lockContext = lockManager.lockItems(Method.RESOLVE, wireLock);
             try {
                 wiremap = resolver.resolve(resolveContext);
+
+                // The hooks end before the results are applied: a hook that fails in end() fails the resolve, which
+                // then has no effect
+                hooksEnded = true;
+                hookregs.end();
+
                 if (applyResults) {
                     applyResolverResults(env, wiremap);
                 }
@@ -236,7 +243,8 @@ final class FrameworkResolverImpl implements XResolver {
             }
             return wiremap;
         } finally {
-            hookregs.end();
+            if (hooksEnded == false)
+                hookregs.end();
         }
     }
 

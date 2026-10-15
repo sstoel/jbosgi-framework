@@ -210,7 +210,7 @@ public interface FrameworkMessages {
     BundleException cannotUninstallSystemBundle();
 
     @Message(id = 11249, value = "Bundle cannot be started due to current start level")
-    BundleException cannotStartBundleDueToStartLevel();
+    String cannotStartBundleDueToStartLevel();
 
     @Message(id = 11250, value = "Cannot resolve bundle: %s")
     String cannotResolveBundle(Bundle bundle);
@@ -361,6 +361,18 @@ public interface FrameworkMessages {
 
     @Message(id = 11295, value = "Cannot start the activator of the module connector")
     BundleException cannotStartConnectActivator(@Cause Throwable cause);
+
+    @Message(id = 11303, value = "Cannot stop the activator of the module connector")
+    BundleException cannotStopConnectActivator(@Cause Throwable cause);
+
+    @Message(id = 11304, value = "Invalid bundle headers of: %s")
+    String invalidBundleHeaders(String location);
+
+    @Message(id = 11305, value = "The %s namespace cannot be used in the %s header of: %s")
+    String reservedNamespaceInHeader(String namespace, String header, XBundleRevision brev);
+
+    @Message(id = 11306, value = "Not a bundle of this framework: %s")
+    IllegalArgumentException illegalArgumentForeignBundle(Bundle bundle);
 
     @Message(id = 11296, value = "Cannot access the connect content of: %s")
     IllegalStateException illegalStateCannotAccessConnectContent(@Cause Throwable cause, XBundleRevision brev);

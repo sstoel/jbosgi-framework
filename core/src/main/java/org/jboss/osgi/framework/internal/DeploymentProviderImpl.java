@@ -26,7 +26,9 @@ import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 import static org.jboss.osgi.framework.spi.IntegrationConstants.STORAGE_STATE_KEY;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.Properties;
+import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 
 import org.jboss.osgi.deployment.deployer.Deployment;
@@ -41,6 +43,7 @@ import org.jboss.osgi.spi.BundleInfo;
 import org.jboss.osgi.vfs.VFSUtils;
 import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.BundleException;
+import org.osgi.framework.Constants;
 import org.osgi.framework.Version;
 
 /**
@@ -65,6 +68,23 @@ public final class DeploymentProviderImpl implements DeploymentProvider {
 
     @Override
     public Deployment createDeployment(String location, VirtualFile rootFile) throws BundleException {
+
+        // The headers of a connect content are the bundle's headers as they are, not a manifest (60.4.3)
+        Map<String, String> connectHeaders;
+        try {
+            connectHeaders = ConnectVirtualFile.getConnectHeaders(rootFile);
+        } catch (IOException ex) {
+            throw MESSAGES.cannotConnectBundle(ex, location);
+        }
+        if (connectHeaders != null)
+            return createDeployment(rootFile, location, OSGiMetaDataBuilder.load(connectHeaders));
+
+        // A jar whose manifest has no OSGi header can have its headers in jbosgi-xservice.properties
+        if (hasOSGiManifest(rootFile) == false) {
+            Properties props = getXServiceProperties(rootFile);
+            if (props != null)
+                return createDeployment(rootFile, location, OSGiMetaDataBuilder.load(props));
+        }
 
         BundleException cause = null;
         try {
@@ -110,6 +130,61 @@ public final class DeploymentProviderImpl implements DeploymentProvider {
 
         // Rethrow root cause if we have one
         throw (cause != null ? cause : new BundleException("Cannot create deployment from: " + rootFile));
+    }
+
+    /**
+     * The deployment of the given metadata, which is validated: invalid headers are a MANIFEST_ERROR
+     */
+    private Deployment createDeployment(VirtualFile rootFile, String location, OSGiMetaData metadata) throws BundleException {
+        try {
+            OSGiMetaDataBuilder.validateMetadata(metadata);
+            String symbolicName = metadata.getBundleSymbolicName();
+            Version version = metadata.getBundleVersion();
+            Deployment dep = DeploymentFactory.createDeployment(rootFile, location, symbolicName, version);
+            dep.putAttachment(IntegrationConstants.OSGI_METADATA_KEY, metadata);
+            return dep;
+        } catch (BundleException ex) {
+            if (ex.getType() == BundleException.MANIFEST_ERROR)
+                throw ex;
+            throw new BundleException(ex.getMessage(), BundleException.MANIFEST_ERROR, ex);
+        } catch (RuntimeException ex) {
+            throw new BundleException(MESSAGES.invalidBundleHeaders(location), BundleException.MANIFEST_ERROR, ex);
+        }
+    }
+
+    // Whether the content has a manifest with an OSGi header. OSGiManifestBuilder is not used, it needs ShrinkWrap
+    private static boolean hasOSGiManifest(VirtualFile rootFile) {
+        try {
+            Manifest manifest = VFSUtils.getManifest(rootFile);
+            if (manifest == null)
+                return false;
+            Attributes attributes = manifest.getMainAttributes();
+            for (String header : new String[] { Constants.BUNDLE_MANIFESTVERSION, Constants.BUNDLE_NAME, Constants.BUNDLE_SYMBOLICNAME, Constants.BUNDLE_VERSION }) {
+                if (attributes.getValue(header) != null)
+                    return true;
+            }
+            return false;
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
+    // The jbosgi-xservice.properties of the content, or null
+    private static Properties getXServiceProperties(VirtualFile rootFile) throws BundleException {
+        try {
+            VirtualFile child = rootFile.getChild("META-INF/jbosgi-xservice.properties");
+            if (child == null) {
+                VirtualFile parentFile = rootFile.getParent();
+                child = parentFile != null ? parentFile.getChild("jbosgi-xservice.properties") : null;
+            }
+            if (child == null)
+                return null;
+            Properties props = new Properties();
+            props.load(child.openStream());
+            return props;
+        } catch (IOException ex) {
+            throw new BundleException(ex.getMessage(), BundleException.MANIFEST_ERROR, ex);
+        }
     }
 
     @Override

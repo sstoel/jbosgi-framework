@@ -36,6 +36,8 @@ import java.util.regex.Pattern;
 import org.jboss.osgi.metadata.OSGiMetaData;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.Constants;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.InvalidSyntaxException;
 import org.osgi.framework.Version;
 import org.osgi.framework.VersionRange;
 
@@ -86,16 +88,22 @@ final class BundleManifestSyntaxValidator {
             assertVersion(Constants.BUNDLE_VERSION, bundleVersion, bundleVersion);
 
         for (Clause clause : headers.get(Constants.BUNDLE_SYMBOLICNAME)) {
-            for (String symbolicName : clause.paths) {
-                if (SYMBOLIC_NAME.matcher(symbolicName).matches() == false)
-                    throw manifestError(MESSAGES.invalidSymbolicName(symbolicName, location));
-            }
+            assertSymbolicNames(clause);
             assertDirective(Constants.BUNDLE_SYMBOLICNAME, clause, Constants.SINGLETON_DIRECTIVE, "true", "false");
+            assertMandatoryAttributes(clause);
             assertDirective(Constants.BUNDLE_SYMBOLICNAME, clause, Constants.FRAGMENT_ATTACHMENT_DIRECTIVE, Constants.FRAGMENT_ATTACHMENT_ALWAYS,
                     Constants.FRAGMENT_ATTACHMENT_NEVER, Constants.FRAGMENT_ATTACHMENT_RESOLVETIME);
         }
 
+        // A fragment names exactly one host bundle
+        String fragmentHost = manifestHeaders.get(Constants.FRAGMENT_HOST);
+        if (fragmentHost != null) {
+            List<Clause> clauses = headers.get(Constants.FRAGMENT_HOST);
+            if (clauses.size() != 1 || clauses.get(0).paths.size() != 1)
+                throw manifestError(MESSAGES.invalidHeaderValue(Constants.FRAGMENT_HOST, fragmentHost, location));
+        }
         for (Clause clause : headers.get(Constants.FRAGMENT_HOST)) {
+            assertSymbolicNames(clause);
             // The extension directive is validated with the bundle revision, an unknown value is accepted
             assertVersionRange(Constants.FRAGMENT_HOST, clause, Constants.BUNDLE_VERSION_ATTRIBUTE);
         }
@@ -117,19 +125,13 @@ final class BundleManifestSyntaxValidator {
                 if (version != null)
                     assertVersion(Constants.EXPORT_PACKAGE, version, clause.toString());
             }
-            String mandatory = clause.directives.get(Constants.MANDATORY_DIRECTIVE);
-            if (mandatory != null) {
-                for (String attribute : mandatory.split(",")) {
-                    attribute = attribute.trim();
-                    if (attribute.length() > 0 && clause.attributes.containsKey(attribute) == false)
-                        throw manifestError(MESSAGES.undefinedMandatoryAttribute(attribute, clause.toString(), location));
-                }
-            }
+            assertMandatoryAttributes(clause);
         }
 
         // Requiring the same bundle symbolic name more than once
         Set<String> requiredBundles = new HashSet<String>();
         for (Clause clause : headers.get(Constants.REQUIRE_BUNDLE)) {
+            assertSymbolicNames(clause);
             for (String symbolicName : clause.paths) {
                 if (requiredBundles.add(symbolicName) == false)
                     throw manifestError(MESSAGES.duplicateRequireBundle(symbolicName, location));
@@ -148,6 +150,104 @@ final class BundleManifestSyntaxValidator {
             if (clause.paths.equals(Arrays.asList(Constants.ACTIVATION_LAZY)) == false)
                 throw manifestError(MESSAGES.invalidHeaderValue(Constants.BUNDLE_ACTIVATIONPOLICY, clause.toString(), location));
         }
+
+        validateNativeCode();
+    }
+
+    private void assertSymbolicNames(Clause clause) throws BundleException {
+        for (String symbolicName : clause.paths) {
+            if (SYMBOLIC_NAME.matcher(symbolicName).matches() == false)
+                throw manifestError(MESSAGES.invalidSymbolicName(symbolicName, location));
+        }
+    }
+
+    // The attributes that a mandatory directive names must be defined in the clause (3.6.5, 3.7.6)
+    private void assertMandatoryAttributes(Clause clause) throws BundleException {
+        String mandatory = clause.directives.get(Constants.MANDATORY_DIRECTIVE);
+        if (mandatory != null) {
+            for (String attribute : mandatory.split(",")) {
+                attribute = attribute.trim();
+                if (attribute.length() > 0 && clause.attributes.containsKey(attribute) == false)
+                    throw manifestError(MESSAGES.undefinedMandatoryAttribute(attribute, clause.toString(), location));
+            }
+        }
+    }
+
+    /**
+     * Bundle-NativeCode (3.10): every clause has at least one path, except the optional '*' at the end; an osversion is
+     * a version range; a selection-filter is a valid filter (NATIVECODE_ERROR)
+     */
+    private void validateNativeCode() throws BundleException {
+        String value = manifestHeaders.get(Constants.BUNDLE_NATIVECODE);
+        if (value == null)
+            return;
+        assertQuotesTerminated(Constants.BUNDLE_NATIVECODE, value);
+        List<String> clauseSpecs = split(value, ',');
+        for (int i = 0; i < clauseSpecs.size(); i++) {
+            String clauseSpec = clauseSpecs.get(i).trim();
+            if (clauseSpec.equals("*") && i == clauseSpecs.size() - 1)
+                continue;
+            boolean path = false;
+            boolean parameter = false;
+            for (String part : split(clauseSpec, ';')) {
+                part = part.trim();
+                int index = indexOfUnquoted(part, '=');
+                if (index < 0) {
+                    if (part.isEmpty() || unquote(part).isEmpty() || parameter)
+                        throw manifestError(MESSAGES.invalidHeaderValue(Constants.BUNDLE_NATIVECODE, clauseSpec, location));
+                    path = true;
+                    continue;
+                }
+                parameter = true;
+                String name = part.substring(0, index).trim();
+                String paramValue = unquote(part.substring(index + 1));
+                if (Constants.BUNDLE_NATIVECODE_OSVERSION.equals(name)) {
+                    try {
+                        new VersionRange(paramValue);
+                    } catch (IllegalArgumentException ex) {
+                        throw manifestError(MESSAGES.invalidHeaderValue(Constants.BUNDLE_NATIVECODE, clauseSpec, location));
+                    }
+                } else if (Constants.SELECTION_FILTER_ATTRIBUTE.equals(name)) {
+                    try {
+                        FrameworkUtil.createFilter(paramValue);
+                    } catch (InvalidSyntaxException ex) {
+                        throw new BundleException(MESSAGES.invalidHeaderValue(Constants.BUNDLE_NATIVECODE, clauseSpec, location), BundleException.NATIVECODE_ERROR, ex);
+                    }
+                }
+            }
+            if (path == false)
+                throw manifestError(MESSAGES.invalidHeaderValue(Constants.BUNDLE_NATIVECODE, clauseSpec, location));
+        }
+    }
+
+    private void assertQuotesTerminated(String header, String value) throws BundleException {
+        char quote = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '\\' && quote != 0)
+                i++;
+            else if (quote != 0)
+                quote = c == quote ? 0 : quote;
+            else if (c == '"')
+                quote = c;
+        }
+        if (quote != 0)
+            throw manifestError(MESSAGES.invalidHeaderValue(header, value, location));
+    }
+
+    // The type of a typed attribute: String, Version, Long, Double, List or List<String|Version|Long|Double> (3.3.4)
+    private void assertAttributeType(String header, String clause, String type) throws BundleException {
+        String aux = type.trim();
+        if (aux.startsWith("List")) {
+            aux = aux.substring(4).trim();
+            if (aux.isEmpty())
+                return;
+            if (aux.startsWith("<") == false || aux.endsWith(">") == false)
+                throw manifestError(MESSAGES.invalidHeaderValue(header, clause, location));
+            aux = aux.substring(1, aux.length() - 1).trim();
+        }
+        if (Arrays.asList("String", "Version", "Long", "Double").contains(aux) == false)
+            throw manifestError(MESSAGES.invalidHeaderValue(header, clause, location));
     }
 
     private void assertVersion(String header, String version, String headerValue) throws BundleException {
@@ -185,16 +285,33 @@ final class BundleManifestSyntaxValidator {
         if (value == null)
             return result;
 
+        // A quoted string that is not terminated swallows the rest of the header
+        assertQuotesTerminated(header, value);
+
         for (String clauseSpec : split(value, ',')) {
             if (clauseSpec.trim().length() == 0)
                 continue;
             Clause clause = new Clause(clauseSpec.trim());
-            for (String part : split(clauseSpec, ';')) {
-                part = part.trim();
+            boolean parameters = false;
+            List<String> parts = split(clauseSpec, ';');
+            for (int i = 0; i < parts.size(); i++) {
+                String part = parts.get(i).trim();
+                // A trailing semicolon is tolerated
+                if (part.isEmpty() && i > 0 && i == parts.size() - 1)
+                    continue;
                 int index = indexOfUnquoted(part, '=');
                 if (index < 0) {
+                    // The paths come first, a path is not empty
+                    if (parameters || part.isEmpty())
+                        throw manifestError(MESSAGES.invalidHeaderValue(header, clauseSpec.trim(), location));
                     clause.paths.add(part);
-                } else if (index > 0 && part.charAt(index - 1) == ':') {
+                    continue;
+                }
+                // A clause starts with at least one path
+                if (clause.paths.isEmpty())
+                    throw manifestError(MESSAGES.invalidHeaderValue(header, clauseSpec.trim(), location));
+                parameters = true;
+                if (index > 0 && part.charAt(index - 1) == ':') {
                     String name = part.substring(0, index - 1).trim();
                     if (clause.directives.put(name, unquote(part.substring(index + 1))) != null)
                         throw manifestError(MESSAGES.duplicateHeaderParameter(name + ":", header, clauseSpec.trim(), location));
@@ -202,8 +319,10 @@ final class BundleManifestSyntaxValidator {
                     // The name of an attribute may be followed by its type
                     String name = part.substring(0, index).trim();
                     int typeIndex = name.indexOf(':');
-                    if (typeIndex > 0)
+                    if (typeIndex > 0) {
+                        assertAttributeType(header, clauseSpec.trim(), name.substring(typeIndex + 1));
                         name = name.substring(0, typeIndex).trim();
+                    }
                     if (clause.attributes.put(name, unquote(part.substring(index + 1))) != null)
                         throw manifestError(MESSAGES.duplicateHeaderParameter(name, header, clauseSpec.trim(), location));
                 }

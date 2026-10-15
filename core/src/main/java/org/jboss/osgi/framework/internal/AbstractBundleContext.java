@@ -255,6 +255,8 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
     public Bundle getBundle(long id) {
         asertNotDestroyed();
         Bundle result = getBundleManager().getBundleById(id);
+        if (result == null)
+            return null;
 
         // Call the {@link FindHook}
         Collection<Bundle> hookBundles = new RemoveOnlyCollection<Bundle>(result);
@@ -484,7 +486,7 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
         if (sref == null)
             throw MESSAGES.illegalArgumentNull("sref");
         asertNotDestroyed();
-        ServiceState<?> serviceState = ServiceStateImpl.assertServiceState(sref);
+        ServiceState<?> serviceState = ServiceStateImpl.assertServiceState(sref, getServiceManager());
         ServiceManager serviceManager = getFrameworkState().getServiceManagerPlugin();
         S service = (S) serviceManager.getService(bundleState, serviceState);
         return service;
@@ -495,7 +497,7 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
         if (sref == null)
             throw MESSAGES.illegalArgumentNull("sref");
         asertNotDestroyed();
-        ServiceState<?> serviceState = ServiceStateImpl.assertServiceState(sref);
+        ServiceState<?> serviceState = ServiceStateImpl.assertServiceState(sref, getServiceManager());
         if (serviceState.isUnregistered())
             return null;
         return new ServiceObjectsImpl<S>(sref);
@@ -506,7 +508,7 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
         if (sref == null)
             throw MESSAGES.illegalArgumentNull("sref");
         asertNotDestroyed();
-        ServiceState<?> serviceState = ServiceStateImpl.assertServiceState(sref);
+        ServiceState<?> serviceState = ServiceStateImpl.assertServiceState(sref, getServiceManager());
         return getServiceManager().ungetService(bundleState, serviceState);
     }
 
@@ -543,7 +545,7 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
         @SuppressWarnings("unchecked")
         ServiceObjectsImpl(ServiceReference<S> sref) {
             this.sref = sref;
-            this.serviceState = ServiceStateImpl.assertServiceState(sref);
+            this.serviceState = ServiceStateImpl.assertServiceState(sref, getServiceManager());
         }
 
         @Override

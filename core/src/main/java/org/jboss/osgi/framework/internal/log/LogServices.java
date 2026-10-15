@@ -75,23 +75,27 @@ public final class LogServices {
     private final LoggerAdminImpl loggerAdmin;
     private final List<ServiceRegistration<?>> registrations = new ArrayList<ServiceRegistration<?>>();
     private final List<LogListener> listeners = new CopyOnWriteArrayList<LogListener>();
+    private volatile boolean stopped;
     private final Set<LogServiceImpl> logServices = ConcurrentHashMap.newKeySet();
     private final Deque<LogEntry> entries = new ArrayDeque<LogEntry>();
     private final AtomicLong sequence = new AtomicLong();
     private final EventLogger eventLogger = new EventLogger();
     private final ConfigurationSupport configurationSupport;
+    private final EventAdminSupport eventAdminSupport;
     private ExecutorService executor;
 
     public LogServices(BundleContext context) {
         this.context = context;
         this.loggerAdmin = new LoggerAdminImpl(context.getProperty(LoggerContext.LOGGER_CONTEXT_DEFAULT_LOGLEVEL));
         this.configurationSupport = new ConfigurationSupport(context, loggerAdmin);
+        this.eventAdminSupport = new EventAdminSupport(context);
     }
 
     /**
      * Register the services and start logging the events of the framework.
      */
     public synchronized void start() {
+        stopped = false;
         executor = Executors.newSingleThreadExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable runnable) {
@@ -137,13 +141,17 @@ public final class LogServices {
         context.addServiceListener(eventLogger);
         context.addFrameworkListener(eventLogger);
         configurationSupport.open();
+        eventAdminSupport.open();
     }
 
     /**
      * Unregister the services and stop logging.
      */
     public synchronized void stop() {
+        // The loggers handed out are no-ops once the logger factory is gone (101.3)
+        stopped = true;
         configurationSupport.close();
+        eventAdminSupport.close();
         try {
             context.removeBundleListener(eventLogger);
             context.removeServiceListener(eventLogger);
@@ -173,6 +181,8 @@ public final class LogServices {
     }
 
     boolean isEnabled(Bundle bundle, String loggerName, LogLevel level) {
+        if (stopped)
+            return false;
         return loggerAdmin.getContext(bundle).getEffectiveLogLevel(loggerName).implies(level);
     }
 
@@ -198,6 +208,8 @@ public final class LogServices {
      * Add an entry to the log. The caller has checked that the level is enabled.
      */
     void log(String loggerName, Bundle bundle, ServiceReference<?> reference, LogLevel logLevel, int level, String message, Throwable exception) {
+        if (stopped)
+            return;
         final LogEntry entry;
         ExecutorService deliverer;
         synchronized (entries) {
@@ -208,7 +220,8 @@ public final class LogServices {
 
             // Submitted in the order of the sequence
             deliverer = executor;
-            if (deliverer != null && listeners.isEmpty() == false) {
+            final boolean post = eventAdminSupport.isAvailable();
+            if (deliverer != null && (listeners.isEmpty() == false || post)) {
                 // The listeners that are registered when the entry is created get it, not those added before it is delivered
                 final List<LogListener> targets = new ArrayList<LogListener>(listeners);
                 try {
@@ -216,6 +229,9 @@ public final class LogServices {
                         @Override
                         public void run() {
                             deliver(entry, targets);
+                            // The entry is posted to Event Admin as well (101.7.4)
+                            if (post)
+                                eventAdminSupport.post(entry);
                         }
                     });
                 } catch (RejectedExecutionException ex) {

@@ -83,7 +83,7 @@ final class SystemBundleState extends AbstractBundleState<SystemBundleRevision> 
 
     @Override
     public String getLocation() {
-        return Constants.JBOSGI_FRAMEWORK_LOCATION;
+        return Constants.SYSTEM_BUNDLE_LOCATION;
     }
 
     @Override
@@ -149,9 +149,9 @@ final class SystemBundleState extends AbstractBundleState<SystemBundleRevision> 
     }
 
     @Override
-    boolean updateInternal(InputStream input) throws BundleException {
+    int updateInternal(InputStream input) throws BundleException {
         // [TODO] Returns immediately, then stops and restarts the Framework on another thread.
-        return false;
+        return -1;
     }
 
     @Override

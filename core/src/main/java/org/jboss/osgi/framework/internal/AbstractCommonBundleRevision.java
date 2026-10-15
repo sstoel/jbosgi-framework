@@ -8,14 +8,16 @@ package org.jboss.osgi.framework.internal;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Dictionary;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
-import java.util.MissingResourceException;
 import java.util.PropertyResourceBundle;
 import java.util.ResourceBundle;
 import java.util.Set;
@@ -57,20 +59,25 @@ public abstract class AbstractCommonBundleRevision extends AbstractBundleRevisio
         if (baseName == null)
             baseName = Constants.BUNDLE_LOCALIZATION_DEFAULT_BASENAME;
 
-        // Get the resource bundle URL for the given base and locale
-        URL entryURL = getLocalizationEntry(baseName, locale);
+        // Get the resource bundle URLs for the given base and locale, from the most specific to the least specific
+        List<URL> entryURLs = getLocalizationEntries(baseName, locale);
 
         // If the specified locale entry could not be found fall back to the default locale entry
-        if (entryURL == null) {
+        if (entryURLs.isEmpty()) {
             String defaultLocale = Locale.getDefault().toString();
-            entryURL = getLocalizationEntry(baseName, defaultLocale);
+            entryURLs = getLocalizationEntries(baseName, defaultLocale);
         }
 
-        // Read the resource bundle
-        ResourceBundle resBundle = null;
-        if (entryURL != null) {
+        // Read the resource bundles, a key is translated by the most specific one that defines it (3.11.2)
+        List<ResourceBundle> resBundles = new ArrayList<ResourceBundle>();
+        for (URL entryURL : entryURLs) {
             try {
-                resBundle = new PropertyResourceBundle(entryURL.openStream());
+                InputStream input = entryURL.openStream();
+                try {
+                    resBundles.add(new PropertyResourceBundle(input));
+                } finally {
+                    input.close();
+                }
             }
             catch (IOException ex) {
                 throw MESSAGES.illegalStateCannotReadResourceBundle(ex, entryURL);
@@ -85,12 +92,10 @@ public abstract class AbstractCommonBundleRevision extends AbstractBundleRevisio
             if (value.startsWith("%"))
                 value = value.substring(1);
 
-            if (resBundle != null) {
-                try {
+            for (ResourceBundle resBundle : resBundles) {
+                if (resBundle.containsKey(value)) {
                     value = resBundle.getString(value);
-                }
-                catch (MissingResourceException ex) {
-                    // ignore
+                    break;
                 }
             }
 
@@ -98,6 +103,26 @@ public abstract class AbstractCommonBundleRevision extends AbstractBundleRevisio
         }
 
         return new CaseInsensitiveDictionary(locHeaders);
+    }
+
+    /**
+     * The existing localization entries of the search path for the locale, from the most specific to the base entry
+     */
+    List<URL> getLocalizationEntries(String baseName, String locale)
+    {
+        List<URL> result = new ArrayList<URL>();
+        String suffix = locale;
+        while (true) {
+            String entryPath = suffix.isEmpty() ? baseName + ".properties" : baseName + "_" + suffix + ".properties";
+            URL entryURL = getLocalizationEntry(entryPath);
+            if (entryURL != null)
+                result.add(entryURL);
+            if (suffix.isEmpty())
+                break;
+            int lastIndex = suffix.lastIndexOf('_');
+            suffix = lastIndex > 0 ? suffix.substring(0, lastIndex) : "";
+        }
+        return result;
     }
 
     public URL getLocalizationEntry(String baseName, String locale)

@@ -79,6 +79,7 @@ public final class FrameworkBuilderImpl implements FrameworkBuilder {
     private ServiceContainer serviceContainer;
     private ServiceTarget serviceTarget;
     private ModuleConnector moduleConnector;
+    private boolean connectorInitialized;
     private boolean closed;
 
     public FrameworkBuilderImpl(Map<String, String> props, Mode initialMode) {
@@ -149,6 +150,18 @@ public final class FrameworkBuilderImpl implements FrameworkBuilder {
         return moduleConnector;
     }
 
+    /**
+     * The module connector is initialized once for the framework, before it is used for anything else
+     *
+     * @return true if the caller is to initialize it now
+     */
+    synchronized boolean markModuleConnectorInitialized() {
+        if (moduleConnector == null || connectorInitialized)
+            return false;
+        connectorInitialized = true;
+        return true;
+    }
+
     @Override
     public void setModuleConnector(ModuleConnector moduleConnector) {
         this.moduleConnector = moduleConnector;
@@ -169,6 +182,13 @@ public final class FrameworkBuilderImpl implements FrameworkBuilder {
             integrationServices.put(phase, phaseServices);
         }
         phaseServices.put(service.getServiceName(), service);
+    }
+
+    /**
+     * The services of a framework run are not kept after the framework stopped, the next init creates new ones
+     */
+    synchronized void releaseIntegrationServices() {
+        integrationServices.clear();
     }
 
     @Override

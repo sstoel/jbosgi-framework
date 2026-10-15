@@ -21,8 +21,6 @@
  */
 package org.jboss.osgi.framework.internal;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -42,9 +40,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.Vector;
-import java.util.jar.Attributes;
-import java.util.jar.JarFile;
-import java.util.jar.Manifest;
 import java.util.regex.Pattern;
 
 import org.jboss.osgi.vfs.VirtualFile;
@@ -81,6 +76,24 @@ final class ConnectVirtualFile implements VirtualFile {
 
     static boolean isConnectFile(VirtualFile file) {
         return file instanceof ConnectVirtualFile;
+    }
+
+    /**
+     * The headers that the connect content of the given root file provides, or null when it provides none (the bundle
+     * headers then come from the manifest entry of the content). They are the bundle's headers as they are (60.4.3)
+     */
+    static Map<String, String> getConnectHeaders(VirtualFile file) throws IOException {
+        if (file instanceof ConnectVirtualFile == false)
+            return null;
+        ConnectVirtualFile connectFile = (ConnectVirtualFile) file;
+        return connectFile == connectFile.root.rootFile ? connectFile.root.getHeaders() : null;
+    }
+
+    /**
+     * Open the connect content, before it is used by the install
+     */
+    void openContent() throws IOException {
+        root.open();
     }
 
     private ConnectVirtualFile(Root root, String path, boolean directory) {
@@ -196,8 +209,6 @@ final class ConnectVirtualFile implements VirtualFile {
             fullPath = fullPath.substring(0, fullPath.length() - 1);
         if (fullPath.length() == 0)
             return root.rootFile;
-        if (JarFile.MANIFEST_NAME.equals(fullPath) && root.getHeaders() != null)
-            return root.manifestFile;
         Map<String, ConnectVirtualFile> files = root.getFiles();
         ConnectVirtualFile result = files.get(fullPath);
         if (result == null) {
@@ -264,8 +275,6 @@ final class ConnectVirtualFile implements VirtualFile {
     public InputStream openStream() throws IOException {
         if (directory)
             throw new IOException("Cannot open a stream for a connect content directory: " + this);
-        if (this == root.manifestFile)
-            return new ByteArrayInputStream(root.getManifestBytes());
         return getEntry().getInputStream();
     }
 
@@ -339,7 +348,6 @@ final class ConnectVirtualFile implements VirtualFile {
         private final ConnectContent content;
         private final OpenContents openContents;
         private final ConnectVirtualFile rootFile;
-        private final ConnectVirtualFile manifestFile;
         private Map<String, ConnectVirtualFile> files;
         private Map<String, String> headers;
         private boolean headersRead;
@@ -351,7 +359,6 @@ final class ConnectVirtualFile implements VirtualFile {
             this.openContents = openContents;
             this.host = Integer.toHexString(System.identityHashCode(content));
             this.rootFile = new ConnectVirtualFile(this, "", true);
-            this.manifestFile = new ConnectVirtualFile(this, JarFile.MANIFEST_NAME, false);
         }
 
         synchronized ConnectContent open() throws IOException {
@@ -404,18 +411,6 @@ final class ConnectVirtualFile implements VirtualFile {
             return headers;
         }
 
-        byte[] getManifestBytes() throws IOException {
-            Manifest manifest = new Manifest();
-            Attributes attributes = manifest.getMainAttributes();
-            attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
-            for (Map.Entry<String, String> entry : getHeaders().entrySet()) {
-                if (Attributes.Name.MANIFEST_VERSION.toString().equalsIgnoreCase(entry.getKey()) == false)
-                    attributes.putValue(entry.getKey(), entry.getValue());
-            }
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            manifest.write(baos);
-            return baos.toByteArray();
-        }
     }
 
     /** A connection to an entry of the connect content */
@@ -432,7 +427,7 @@ final class ConnectVirtualFile implements VirtualFile {
         @Override
         public void connect() throws IOException {
             if (connected == false) {
-                if (file.directory == false && file != file.root.manifestFile)
+                if (file.directory == false)
                     entry = file.getEntry();
                 connected = true;
             }

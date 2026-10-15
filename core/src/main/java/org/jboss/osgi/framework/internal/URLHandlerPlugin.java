@@ -75,5 +75,6 @@ final class URLHandlerPlugin extends AbstractIntegrationService<URLHandlerSuppor
     @Override
     public void stop(StopContext context) {
         getValue().stop();
+        super.stop(context);
     }
 }

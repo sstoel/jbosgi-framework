@@ -58,8 +58,13 @@ public final class StorageManagerImpl implements StorageManager {
 
     // The highest bundle id that the framework assigned, a bundle id is not used again (4.4.3)
     private static final String LAST_BUNDLE_ID_FILE = "last-bundle-id";
+    private static final String INITIAL_STARTLEVEL_FILE = "initial-bundle-startlevel";
+
+    // The initial bundle start level that was set before the framework was launched again, -1 before the storage is
+    // initialized and 0 if none was set
+    private volatile int storedInitialStartLevel = -1;
     // The data area of a bundle, the bundle directory also holds the files of the framework
-    private static final String DATA_DIRECTORY = "data";
+    static final String DATA_DIRECTORY = "data";
 
     private final BundleManagerPlugin bundleManager;
     private final Map<String, StorageState> storageStates = new ConcurrentHashMap<String, StorageState>();
@@ -95,6 +100,12 @@ public final class StorageManagerImpl implements StorageManager {
             LOGGER.debugf("Deleting storage: %s", storage.getAbsolutePath());
             deleteRecursive(storage);
         }
+
+        // The module connector of a connect framework gets the cleaned storage area, before the connect bundles are restored
+        bundleManager.initializeModuleConnector(getStorageArea());
+
+        // The initial bundle start level is persistent (10.3.1)
+        storedInitialStartLevel = readInitialBundleStartLevel();
 
         // Initialize storage states
         FilenameFilter filter = new FilenameFilter() {
@@ -233,6 +244,39 @@ public final class StorageManagerImpl implements StorageManager {
             return Long.parseLong(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim());
         } catch (IOException | NumberFormatException ex) {
             LOGGER.warnf(ex, "Cannot read the last bundle id: %s", file);
+            return 0;
+        }
+    }
+
+    /**
+     * The initial bundle start level that was set before the framework was launched again: -1 before the storage is
+     * initialized, 0 if none was set
+     */
+    int getStoredInitialBundleStartLevel() {
+        return storedInitialStartLevel;
+    }
+
+    void storeInitialBundleStartLevel(int startlevel) {
+        storedInitialStartLevel = startlevel;
+        File file = new File(getStorageArea(), INITIAL_STARTLEVEL_FILE);
+        File tmpFile = new File(getStorageArea(), INITIAL_STARTLEVEL_FILE + ".tmp");
+        try {
+            Files.createDirectories(getStorageArea().toPath());
+            Files.write(tmpFile.toPath(), Integer.toString(startlevel).getBytes(StandardCharsets.UTF_8));
+            Files.move(tmpFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException ex) {
+            LOGGER.warnf(ex, "Cannot write the initial bundle start level: %s", file);
+        }
+    }
+
+    private int readInitialBundleStartLevel() {
+        File file = new File(getStorageArea(), INITIAL_STARTLEVEL_FILE);
+        if (file.isFile() == false)
+            return 0;
+        try {
+            return Integer.parseInt(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim());
+        } catch (IOException | NumberFormatException ex) {
+            LOGGER.warnf(ex, "Cannot read the initial bundle start level: %s", file);
             return 0;
         }
     }

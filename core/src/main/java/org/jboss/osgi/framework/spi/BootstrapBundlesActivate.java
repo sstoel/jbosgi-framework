@@ -72,7 +72,12 @@ public class BootstrapBundlesActivate<T> extends BootstrapBundlesService<T> {
             try {
                 bundle.start(getStartOptions(bundle));
             } catch (BundleException ex) {
-                LOGGER.errorCannotStartBundle(ex, bundle);
+                // A persistently started bundle whose start level is not reached yet is started by the start level
+                // change of the framework
+                if (ex.getType() == BundleException.START_TRANSIENT_ERROR)
+                    LOGGER.debugf("Bundle is started at its start level: %s", bundle);
+                else
+                    LOGGER.errorCannotStartBundle(ex, bundle);
             }
         }
 

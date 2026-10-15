@@ -210,6 +210,8 @@ final class FrameworkEventsImpl implements FrameworkEvents {
     @Override
     public void addServiceListener(final XBundle bundleState, final ServiceListener listener, final String filterstr) throws InvalidSyntaxException {
         assert listener != null : "Null listener";
+        // An invalid filter changes nothing: it is parsed before the existing registration is replaced
+        Filter filter = (filterstr != null ? FrameworkUtil.createFilter(filterstr) : NoFilter.INSTANCE);
         synchronized (serviceListeners) {
             // If the context bundleState's list of listeners already contains a listener l such that (l==listener),
             // then this method replaces that listener's filter (which may be null) with the specified one (which may be null).
@@ -222,7 +224,6 @@ final class FrameworkEventsImpl implements FrameworkEvents {
             }
 
             // Create the new listener registration
-            Filter filter = (filterstr != null ? FrameworkUtil.createFilter(filterstr) : NoFilter.INSTANCE);
             ServiceListenerRegistration slreg = new ServiceListenerRegistration(bundleState, listener, filter);
 
             // The {@link ListenerHook} added method is called to provide the hook implementation with information on newly
@@ -403,6 +404,7 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                 }
             } catch (Throwable th) {
                 LOGGER.warnErrorWhileFiringBundleEvent(th, typeName, bundle);
+                publishListenerError(blreg.bundle, th);
             }
         }
 
@@ -414,6 +416,10 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                     // installed, resolved, started, stopped, updated, unresolved, or uninstalled
                     if (asyncBundleEvents.contains(type)) {
                         for (BundleListenerRegistration blreg : registrations) {
+                            // The registration is snapshot when the event is fired; a bundle that is no longer active
+                            // when the event is delivered does not get it (4.7.2)
+                            if (isListenerBundleActive(blreg.bundle) == false)
+                                continue;
                             BundleListener listener = blreg.listener;
                             try {
                                 if (!(listener instanceof SynchronousBundleListener)) {
@@ -421,6 +427,7 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                                 }
                             } catch (Throwable th) {
                                 LOGGER.warnErrorWhileFiringBundleEvent(th, typeName, bundle);
+                                publishListenerError(blreg.bundle, th);
                             }
                         }
                     }
@@ -430,6 +437,21 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                 executorService.execute(runner);
             }
         }
+    }
+
+    /**
+     * The framework publishes a FrameworkEvent.ERROR when a listener callback throws an unchecked exception
+     */
+    private void publishListenerError(XBundle listenerBundle, Throwable th) {
+        if (th instanceof RuntimeException)
+            fireFrameworkEvent(listenerBundle, FrameworkEvent.ERROR, th);
+    }
+
+    private static boolean isListenerBundleActive(XBundle listenerBundle) {
+        if (listenerBundle == null || listenerBundle.getBundleId() == 0)
+            return true;
+        int state = listenerBundle.getState();
+        return state == Bundle.STARTING || state == Bundle.ACTIVE || state == Bundle.STOPPING;
     }
 
     private void callBundleEventHooks(BundleContext syscontext, Collection<BundleContext> contexts, BundleEvent event) {
@@ -671,6 +693,7 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                     }
                 } catch (Throwable th) {
                     LOGGER.warnErrorWhileFiringServiceEvent(th, typeName, serviceState);
+                    publishListenerError(listenerReg.bundle, th);
                 }
             }
         }

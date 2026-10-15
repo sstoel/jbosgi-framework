@@ -138,9 +138,29 @@ public final class ModuleEntriesProvider implements EntriesProvider {
         };
     }
 
-    // Convert file pattern (RFC 1960-based Filter) into a RegEx pattern
+    // Convert file pattern (RFC 1960-based Filter) into a RegEx pattern: only '*' is a wildcard, a backslash escapes the next character
     private static Pattern convertToPattern(String filePattern) {
-        filePattern = filePattern.replace("*", ".*");
-        return Pattern.compile("^" + filePattern + "$");
+        StringBuilder regex = new StringBuilder("^");
+        StringBuilder literal = new StringBuilder();
+        for (int i = 0; i < filePattern.length(); i++) {
+            char c = filePattern.charAt(i);
+            if (c == '\\' && i + 1 < filePattern.length()) {
+                literal.append(filePattern.charAt(++i));
+            } else if (c == '*') {
+                appendLiteral(regex, literal);
+                regex.append(".*");
+            } else {
+                literal.append(c);
+            }
+        }
+        appendLiteral(regex, literal);
+        return Pattern.compile(regex.append('$').toString(), Pattern.DOTALL);
+    }
+
+    private static void appendLiteral(StringBuilder regex, StringBuilder literal) {
+        if (literal.length() > 0) {
+            regex.append(Pattern.quote(literal.toString()));
+            literal.setLength(0);
+        }
     }
 }

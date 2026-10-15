@@ -109,14 +109,19 @@ public final class VirtualFileResourceLoader implements IterableResourceLoader {
      * Find a child of the container. The versioned directories take precedence, except for the META-INF directory.
      */
     private VirtualFile findChild(String path) throws IOException {
-        if (isVersionedPath(path)) {
-            for (VirtualFile versionedRoot : versionedRoots) {
-                VirtualFile child = versionedRoot.getChild(path);
-                if (child != null)
-                    return child;
+        try {
+            if (isVersionedPath(path)) {
+                for (VirtualFile versionedRoot : versionedRoots) {
+                    VirtualFile child = versionedRoot.getChild(path);
+                    if (child != null)
+                        return child;
+                }
             }
+            return virtualFile.getChild(path);
+        } catch (IllegalStateException ex) {
+            // The content was closed, e.g. by an update or uninstall of the bundle
+            throw new IOException(ex);
         }
-        return virtualFile.getChild(path);
     }
 
     private static boolean isVersionedPath(String path) {

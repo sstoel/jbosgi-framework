@@ -30,6 +30,7 @@ import java.lang.reflect.Method;
 import java.net.ContentHandler;
 import java.net.ContentHandlerFactory;
 import java.net.InetAddress;
+import java.net.MalformedURLException;
 import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
@@ -275,7 +276,27 @@ final class URLHandlerSupportImpl implements URLHandlerSupport {
         if (refList == null || refList.isEmpty())
             return null;
 
+        // The handlers of java.protocol.handler.pkgs take precedence over the registered services (52.3.3), the JVM
+        // uses them when the factory returns null
+        if (hasBuiltinStreamHandler(protocol))
+            return null;
+
         return new URLStreamHandlerProxy(protocol);
+    }
+
+    private static boolean hasBuiltinStreamHandler(String protocol) {
+        String packages = SecurityActions.getSystemProperty("java.protocol.handler.pkgs", "");
+        for (String packageName : packages.split("\\|")) {
+            if (packageName.trim().isEmpty())
+                continue;
+            try {
+                Class.forName(packageName.trim() + "." + protocol + ".Handler", false, ClassLoader.getSystemClassLoader());
+                return true;
+            } catch (ClassNotFoundException | LinkageError ex) {
+                // not this package
+            }
+        }
+        return false;
     }
 
     /**
@@ -463,7 +484,18 @@ final class URLHandlerSupportImpl implements URLHandlerSupport {
             URLStreamHandler foreign = getForeignHandler(u);
             if (foreign != null)
                 return new URL(null, u.toExternalForm(), foreign).openConnection();
-            return getHandlerService(u).openConnection(u);
+            return getOpenableHandlerService(u).openConnection(u);
+        }
+
+        // The handler service for a method that can throw an IOException: no service is a MalformedURLException
+        private URLStreamHandlerService getOpenableHandlerService(URL u) throws MalformedURLException {
+            try {
+                return getHandlerService(u);
+            } catch (IllegalStateException ex) {
+                MalformedURLException mue = new MalformedURLException(ex.getMessage());
+                mue.initCause(ex);
+                throw mue;
+            }
         }
 
         @Override
@@ -476,14 +508,27 @@ final class URLHandlerSupportImpl implements URLHandlerSupport {
             URLStreamHandler foreign = getForeignHandler(u);
             if (foreign != null)
                 return new URL(null, u.toExternalForm(), foreign).openConnection(p);
-            URLStreamHandlerService handler = getHandlerService(u);
+            URLStreamHandlerService handler = getOpenableHandlerService(u);
+            // The service may implement the method (also by inheritance), it is not part of URLStreamHandlerService
+            Method method;
             try {
-                Method method = handler.getClass().getDeclaredMethod("openConnection", URL.class, Proxy.class);
+                method = handler.getClass().getMethod("openConnection", URL.class, Proxy.class);
+            } catch (NoSuchMethodException ex) {
+                throw new UnsupportedOperationException("openConnection(URL, Proxy) is not supported by " + handler);
+            }
+            // The class of the service need not be public
+            method.trySetAccessible();
+            try {
                 return (URLConnection) method.invoke(handler, u, p);
-            } catch (Throwable th) {
-                if (th instanceof InvocationTargetException)
-                    th = ((InvocationTargetException)th).getTargetException();
+            } catch (InvocationTargetException ex) {
+                Throwable th = ex.getTargetException();
+                if (th instanceof IOException)
+                    throw (IOException) th;
+                if (th instanceof RuntimeException)
+                    throw (RuntimeException) th;
                 throw MESSAGES.cannotOpenConnectionOnHandler(th, handler);
+            } catch (IllegalAccessException ex) {
+                throw MESSAGES.cannotOpenConnectionOnHandler(ex, handler);
             }
         }
 

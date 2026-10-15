@@ -26,7 +26,6 @@ import static org.osgi.framework.Constants.EXTENSION_BOOTCLASSPATH;
 import static org.osgi.framework.Constants.EXTENSION_DIRECTIVE;
 import static org.osgi.framework.Constants.EXTENSION_FRAMEWORK;
 import static org.osgi.framework.Constants.PACKAGE_SPECIFICATION_VERSION;
-import static org.osgi.framework.Constants.SYSTEM_BUNDLE_SYMBOLICNAME;
 import static org.osgi.framework.Constants.VERSION_ATTRIBUTE;
 
 import java.util.HashSet;
@@ -40,6 +39,7 @@ import org.jboss.osgi.resolver.XBundleRevision;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.Constants;
 import org.osgi.framework.namespace.ExecutionEnvironmentNamespace;
+import org.osgi.framework.namespace.IdentityNamespace;
 import org.osgi.framework.namespace.NativeNamespace;
 
 /**
@@ -122,13 +122,25 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
                 throw new BundleException(MESSAGES.notAllowedToProvideExecutionEnvironmentCapability(brev), BundleException.MANIFEST_ERROR);
         }
 
+        // The osgi.wiring.* namespaces are defined by the module headers, osgi.identity by the bundle identity (3.3.6, 3.3.7)
+        for (ParameterizedAttribute capAttr : metadata.getProvidedCapabilities()) {
+            String namespace = capAttr.getAttribute();
+            if (namespace.startsWith("osgi.wiring.") || IdentityNamespace.IDENTITY_NAMESPACE.equals(namespace))
+                throw new BundleException(MESSAGES.reservedNamespaceInHeader(namespace, Constants.PROVIDE_CAPABILITY, brev), BundleException.MANIFEST_ERROR);
+        }
+        for (ParameterizedAttribute reqAttr : metadata.getRequiredCapabilities()) {
+            String namespace = reqAttr.getAttribute();
+            if (namespace.startsWith("osgi.wiring."))
+                throw new BundleException(MESSAGES.reservedNamespaceInHeader(namespace, Constants.REQUIRE_CAPABILITY, brev), BundleException.MANIFEST_ERROR);
+        }
+
         // Verify Fragment-Host header
         if (brev.isFragment()) {
             ParameterizedAttribute hostAttr = metadata.getFragmentHost();
             String fragmentHost = hostAttr.getAttribute();
             String extension = hostAttr.getDirectiveValue(EXTENSION_DIRECTIVE, String.class);
             if (extension != null) {
-                if (SYSTEM_BUNDLE_SYMBOLICNAME.equals(fragmentHost) == false)
+                if (FrameworkExtensions.isSystemBundleName(fragmentHost) == false)
                     throw MESSAGES.invalidFragmentHostForExtensionFragment(brev);
 
                 if (EXTENSION_BOOTCLASSPATH.equals(extension))
@@ -137,7 +149,7 @@ final class BundleRevisionValidatorR4 implements BundleRevisionValidator {
             }
 
             // A fragment of the system bundle is a framework extension
-            if (SYSTEM_BUNDLE_SYMBOLICNAME.equals(fragmentHost)) {
+            if (FrameworkExtensions.isSystemBundleName(fragmentHost)) {
                 if (brev instanceof BundleStateRevision && !((BundleStateRevision) brev).getBundleManager().getFrameworkExtensions().isSupported())
                     throw MESSAGES.unsupportedFrameworkExtension();
 

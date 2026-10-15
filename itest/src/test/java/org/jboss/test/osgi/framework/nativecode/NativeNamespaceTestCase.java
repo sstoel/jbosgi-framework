@@ -157,41 +157,42 @@ public class NativeNamespaceTestCase extends OSGiFrameworkTest {
     }
 
     @Test
-    public void testSelectionFilterWithLateSystemProperty() throws Exception {
+    public void testSelectionFilterWithLaunchingProperty() throws Exception {
         String osname = getSystemContext().getProperty(Constants.FRAMEWORK_OS_NAME);
         String processor = getSystemContext().getProperty(Constants.FRAMEWORK_PROCESSOR);
-        String header = "lib/libtest.so; osname=\"" + osname + "\"; processor=\"" + processor + "\"; selection-filter=\"(native.namespace.test=foo)\"";
 
-        // The selection filter sees a system property that is set after the framework has started
-        System.setProperty("native.namespace.test", "foo");
-        try {
-            JavaArchive archive = getNativeCodeArchive("native-selection", header);
-            archive.add(new ByteArrayAsset(new byte[] { 0 }), "lib/libtest.so");
-            Bundle bundle = installBundle(archive);
-            try {
-                bundle.start();
-                assertBundleState(Bundle.ACTIVE, bundle.getState());
-                List<BundleWire> wires = bundle.adapt(BundleWiring.class).getRequiredWires(NativeNamespace.NATIVE_NAMESPACE);
-                assertEquals(1, wires.size());
-                assertEquals("foo", wires.get(0).getCapability().getAttributes().get("native.namespace.test"));
-            } finally {
-                bundle.uninstall();
-            }
-        } finally {
-            System.clearProperty("native.namespace.test");
-        }
-
-        // Without the property the clause is not selected
+        // The selection filter sees the launching properties, the framework defaults included
+        String header = "lib/libtest.so; osname=\"" + osname + "\"; processor=\"" + processor + "\"; selection-filter=\"(" + Constants.FRAMEWORK_BSNVERSION + "=*)\"";
         JavaArchive archive = getNativeCodeArchive("native-selection", header);
         archive.add(new ByteArrayAsset(new byte[] { 0 }), "lib/libtest.so");
         Bundle bundle = installBundle(archive);
         try {
             bundle.start();
-            fail("BundleException expected");
-        } catch (BundleException ex) {
-            assertBundleState(Bundle.INSTALLED, bundle.getState());
+            assertBundleState(Bundle.ACTIVE, bundle.getState());
+            List<BundleWire> wires = bundle.adapt(BundleWiring.class).getRequiredWires(NativeNamespace.NATIVE_NAMESPACE);
+            assertEquals(1, wires.size());
+            assertEquals(getSystemContext().getProperty(Constants.FRAMEWORK_BSNVERSION), wires.get(0).getCapability().getAttributes().get(Constants.FRAMEWORK_BSNVERSION));
         } finally {
             bundle.uninstall();
+        }
+
+        // A system property is not a launching property (4.2.2), the clause is not selected
+        header = "lib/libtest.so; osname=\"" + osname + "\"; processor=\"" + processor + "\"; selection-filter=\"(native.namespace.test=foo)\"";
+        System.setProperty("native.namespace.test", "foo");
+        try {
+            archive = getNativeCodeArchive("native-selection", header);
+            archive.add(new ByteArrayAsset(new byte[] { 0 }), "lib/libtest.so");
+            bundle = installBundle(archive);
+            try {
+                bundle.start();
+                fail("BundleException expected");
+            } catch (BundleException ex) {
+                assertBundleState(Bundle.INSTALLED, bundle.getState());
+            } finally {
+                bundle.uninstall();
+            }
+        } finally {
+            System.clearProperty("native.namespace.test");
         }
     }
 

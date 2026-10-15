@@ -58,6 +58,7 @@ import org.jboss.osgi.resolver.spi.ResolverHookProcessor;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.Constants;
+import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.namespace.BundleNamespace;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
@@ -138,6 +139,7 @@ final class FallbackLoader implements LocalLoader {
                 return null;
 
             findRevisionDynamically(context, matchingPatterns);
+            addDynamicWire(context);
         } finally {
             unlockFallbackLoader();
         }
@@ -153,29 +155,6 @@ final class FallbackLoader implements LocalLoader {
             catch (ClassNotFoundException ex) {
                 LOGGER.warnf("Fallback loader cannot load class [%s] from module: %s", className, brev);
                 return null;
-            }
-            if (context.capability != null && context.requirement != null) {
-                BundleCapability bcap = (BundleCapability)context.capability;
-                BundleRequirement breq = (BundleRequirement)context.requirement;
-                AbstractBundleWire wire = new AbstractBundleWire(bcap, breq, brev, hostRev);
-                XWiring requirerWiring = (XWiring) hostBundle.adapt(BundleWiring.class);
-                XWiring providerWiring = (XWiring) brev.getBundle().adapt(BundleWiring.class);
-                if (requirerWiring != null) {
-                    requirerWiring.addRequiredWire(wire);
-                }
-                else {
-                    LOGGER.warnf(
-                            "Fallback loader unable to add 'requirer' wire [%s] to host bundle [%s] - no bundle wiring available",
-                            wire, hostBundle);
-                }
-                if (providerWiring != null) {
-                    providerWiring.addProvidedWire(wire);
-                }
-                else {
-                    LOGGER.warnf(
-                            "Fallback loader unable to add 'provider' wire [%s] to provider bundle [%s] - no bundle wiring available",
-                            wire, brev);
-                }
             }
         }
         else {
@@ -203,6 +182,7 @@ final class FallbackLoader implements LocalLoader {
                 return Collections.emptyList();
 
             findRevisionDynamically(context, matchingPatterns);
+            addDynamicWire(context);
             XBundleRevision brev = context.targetRevision;
             if (brev == null) {
                 LOGGER.debugf("Fallback loader cannot find resource [%s] anywhere", resName);
@@ -224,6 +204,51 @@ final class FallbackLoader implements LocalLoader {
             return Collections.singletonList((Resource) new URLResource(resURL));
         } finally {
             unlockFallbackLoader();
+        }
+    }
+
+    /**
+     * The exporter of a package that the host imported dynamically before
+     */
+    private boolean findWiredRevision(DynamicLoadContext context) {
+        BundleWiring wiring = hostBundle.adapt(BundleWiring.class);
+        if (wiring == null || context.packageName == null)
+            return false;
+        for (BundleWire wire : wiring.getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE)) {
+            String resolution = wire.getRequirement().getDirectives().get(PackageNamespace.REQUIREMENT_RESOLUTION_DIRECTIVE);
+            if (PackageNamespace.RESOLUTION_DYNAMIC.equals(resolution)
+                    && context.packageName.equals(wire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE))) {
+                // The requirement stays null, the wire exists already
+                context.targetRevision = (XBundleRevision) wire.getProvider();
+                context.capability = ((XCapability) wire.getCapability()).adapt(XPackageCapability.class);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The dynamic import is resolved when an exporter of the package was found, the wire exists whether the class or
+     * resource is found or not (3.9.4)
+     */
+    private void addDynamicWire(DynamicLoadContext context) {
+        XBundleRevision brev = context.targetRevision;
+        if (brev == null || context.capability == null || context.requirement == null)
+            return;
+        BundleCapability bcap = (BundleCapability) context.capability;
+        BundleRequirement breq = (BundleRequirement) context.requirement;
+        AbstractBundleWire wire = new AbstractBundleWire(bcap, breq, brev, hostRev);
+        XWiring requirerWiring = (XWiring) hostBundle.adapt(BundleWiring.class);
+        XWiring providerWiring = (XWiring) brev.getBundle().adapt(BundleWiring.class);
+        if (requirerWiring != null) {
+            requirerWiring.addRequiredWire(wire);
+        } else {
+            LOGGER.warnf("Fallback loader unable to add 'requirer' wire [%s] to host bundle [%s] - no bundle wiring available", wire, hostBundle);
+        }
+        if (providerWiring != null) {
+            providerWiring.addProvidedWire(wire);
+        } else {
+            LOGGER.warnf("Fallback loader unable to add 'provider' wire [%s] to provider bundle [%s] - no bundle wiring available", wire, brev);
         }
     }
 
@@ -254,6 +279,9 @@ final class FallbackLoader implements LocalLoader {
                 mapping.put(pathName, recursiveDepth = new AtomicInteger());
 
             if (recursiveDepth.incrementAndGet() == 1) {
+                // A package that was dynamically imported before is loaded from the same exporter
+                if (findWiredRevision(context))
+                    return;
                 // A resource in a directory that is not a package is found by its content, the capabilities of the
                 // module bundles name every path of a module
                 findResourceDirectory(context);
@@ -432,11 +460,18 @@ final class FallbackLoader implements LocalLoader {
         bcaps = new RemoveOnlyCollection<BundleCapability>(bcaps);
 
         if (callHookLifecycle) {
+            // A hook that fails, fails the dynamic import. The failure is published, the class or resource is not found
             try {
-                hookregs.begin(Collections.singleton(hostRev), null);
-                hookregs.filterMatches((BundleRequirement) req, bcaps);
-            } finally {
-                hookregs.end();
+                try {
+                    hookregs.begin(Collections.singleton(hostRev), null);
+                    hookregs.filterMatches((BundleRequirement) req, bcaps);
+                } finally {
+                    hookregs.end();
+                }
+            } catch (RuntimeException ex) {
+                LOGGER.debugf(ex, "Resolver hook failure for dynamic import: %s", req);
+                frameworkState.getFrameworkEvents().fireFrameworkEvent(hostBundle, FrameworkEvent.ERROR, ex);
+                return Collections.emptyList();
             }
         } else {
             hookregs.filterMatches((BundleRequirement) req, bcaps);
@@ -601,7 +636,9 @@ final class FallbackLoader implements LocalLoader {
 
     // The exported packages of a revision, those of a resolved revision include the exports of its fragments
     private List<XPackageCapability> getPackageCapabilities(BundleRevision brev) {
-        BundleWiring wiring = brev.getWiring();
+        // The wiring of a fragment, e.g. of a framework extension, provides only its identity capability
+        boolean fragment = (brev.getTypes() & BundleRevision.TYPE_FRAGMENT) != 0;
+        BundleWiring wiring = fragment ? null : brev.getWiring();
         List<? extends Capability> caps = wiring != null ? wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE) : null;
         if (caps == null)
             caps = brev.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE);

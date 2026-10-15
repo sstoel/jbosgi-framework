@@ -97,7 +97,7 @@ final class WeavingHookProcessor implements ClassFileTransformer {
         wovenClass.markTransformed();
         addDynamicWeavingImports(wovenClass);
 
-        return wovenClass.getBytes();
+        return wovenClass.getDefineBytes();
     }
 
     private void addDynamicWeavingImports(ContextClass wovenClass) {
@@ -129,6 +129,8 @@ final class WeavingHookProcessor implements ClassFileTransformer {
             } catch(RuntimeException rte) {
                 // The dynamic imports must have a valid syntax,
                 // otherwise an Illegal Argument Exception must be thrown.
+                // A clause that failed is processed again with the next woven class
+                processedImports.remove(importSpec);
                 throw MESSAGES.illegalArgumentDynamicWeavingImport(rte, importSpec);
             }
         }

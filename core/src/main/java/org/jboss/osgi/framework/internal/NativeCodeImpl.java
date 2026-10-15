@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Dictionary;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -201,14 +202,25 @@ public final class NativeCodeImpl implements NativeCode {
         if (params.isEmpty())
             throw MESSAGES.cannotFindNativeCodeHeader(userRev);
 
-        // Find the matching parameters
-        List<ParameterizedAttribute> matchedParams = new ArrayList<ParameterizedAttribute>();
+        // The paths of a clause share its parameters: group them into the clauses of the header
+        List<List<ParameterizedAttribute>> clauses = new ArrayList<List<ParameterizedAttribute>>();
+        List<ParameterizedAttribute> clause = null;
         for (ParameterizedAttribute param : params) {
             // The optional marker is not a clause
             if ("*".equals(param.getAttribute()))
                 continue;
-            if (matchParameter(param))
-                matchedParams.add(param);
+            if (clause == null || param.getAttributes() != clause.get(0).getAttributes()) {
+                clause = new ArrayList<ParameterizedAttribute>();
+                clauses.add(clause);
+            }
+            clause.add(param);
+        }
+
+        // Find the matching clauses
+        List<List<ParameterizedAttribute>> matchedParams = new ArrayList<List<ParameterizedAttribute>>();
+        for (List<ParameterizedAttribute> aux : clauses) {
+            if (matchParameter(aux.get(0)))
+                matchedParams.add(aux);
         }
 
         Deployment dep = userRev.getDeployment();
@@ -231,14 +243,46 @@ public final class NativeCodeImpl implements NativeCode {
         // The selected clauses are now sorted in the following priority order:
         // * osversion: floor of the osversion range in descending order, osversion not specified
         // * language: language specified, language not specified
-        // * Position in the Bundle-NativeCode manifest header: lexical left to right
-        // [TODO] sort the clauses
+        // * Position in the Bundle-NativeCode manifest header: lexical left to right (the sort is stable)
+        Collections.sort(matchedParams, new Comparator<List<ParameterizedAttribute>>() {
+            @Override
+            public int compare(List<ParameterizedAttribute> c1, List<ParameterizedAttribute> c2) {
+                Version floor1 = getOSVersionFloor(c1.get(0));
+                Version floor2 = getOSVersionFloor(c2.get(0));
+                if (floor1 != null && floor2 != null && floor1.equals(floor2) == false)
+                    return floor2.compareTo(floor1);
+                if ((floor1 == null) != (floor2 == null))
+                    return floor1 != null ? -1 : 1;
+                boolean language1 = c1.get(0).getAttribute(Constants.BUNDLE_NATIVECODE_LANGUAGE) != null;
+                boolean language2 = c2.get(0).getAttribute(Constants.BUNDLE_NATIVECODE_LANGUAGE) != null;
+                return language1 == language2 ? 0 : language1 ? -1 : 1;
+            }
+        });
 
-        for (ParameterizedAttribute param : matchedParams) {
+        // The libraries of the first clause are used
+        for (ParameterizedAttribute param : matchedParams.get(0)) {
             String libpath = param.getAttribute();
             NativeLibrary library = new NativeLibrary(libpath);
             nativeLibraries.addNativeLibrary(library);
         }
+    }
+
+    // The floor of the osversion range of a clause, or null when the clause has no osversion
+    private Version getOSVersionFloor(ParameterizedAttribute param) {
+        Parameter osversionParam = param.getAttribute(Constants.BUNDLE_NATIVECODE_OSVERSION);
+        if (osversionParam == null)
+            return null;
+        Version result = null;
+        for (String value : getCollection(osversionParam.getValue())) {
+            try {
+                Version floor = VersionRange.valueOf(value.trim()).getLeft();
+                if (result == null || floor.compareTo(result) > 0)
+                    result = floor;
+            } catch (IllegalArgumentException ex) {
+                // not a version range, the clause did not match
+            }
+        }
+        return result;
     }
 
     // The values of a parameter, a parameter that is given more than once in a clause has a collection of values
@@ -330,11 +374,11 @@ public final class NativeCodeImpl implements NativeCode {
             match &= languageMatch;
         }
 
-        // selection-filter evaluates to true when using the values of the system properties or selection-filter is not specified
+        // selection-filter evaluates to true when using the values of the launching properties or selection-filter is not specified
         Parameter filterSelectionParam = param.getAttribute(Constants.SELECTION_FILTER_ATTRIBUTE);
         if (match && filterSelectionParam != null) {
             boolean filterMatch = false;
-            Dictionary<String, Object> frameworkProps = new Hashtable<String, Object>(bundleManager.getProperties());
+            Dictionary<String, Object> frameworkProps = new Hashtable<String, Object>(bundleManager.getLaunchingProperties());
             // The filters of a repeated selection-filter are ORed
             for (String filterSpec : getCollection(filterSelectionParam.getValue())) {
                 try {
@@ -358,16 +402,22 @@ public final class NativeCodeImpl implements NativeCode {
         private final UserBundleState hostBundle;
         private final String libname;
         private final String libpath;
-        private final URL libURL;
+        private final HostBundleRevision hostRevision;
         private File libraryFile;
 
+        /**
+         * @param libname the file name of the library, which the library name that is loaded is mapped to
+         */
         NativeLibraryProviderImpl(HostBundleRevision hostrev, String libname, String libpath) {
             this.hostBundle = hostrev.getBundleState();
+            this.hostRevision = hostrev;
             this.libpath = libpath;
             this.libname = libname;
+        }
 
-            // If a native code library in a selected native code clause cannot be found
-            // within the bundle or its fragments then the bundle must fail to resolve
+        // The entry of the library in the bundle or its fragments. A library of the selected clause that does not exist
+        // does not fail the resolve (R7), it is not found when it is loaded
+        private URL findLibraryURL() {
             String path;
             String filename;
             int idx = libpath.lastIndexOf('/');
@@ -378,11 +428,8 @@ public final class NativeCodeImpl implements NativeCode {
                 path = "";
                 filename = libpath;
             }
-            Enumeration<URL> urls = hostrev.findResolvedEntries(path, filename, false);
-            if (urls == null || urls.hasMoreElements() == false)
-                throw MESSAGES.illegalStateCannotFindNativeLibrary(libpath);
-
-            this.libURL = urls.nextElement();
+            Enumeration<URL> urls = hostRevision.findResolvedEntries(path, filename, false);
+            return urls != null && urls.hasMoreElements() ? urls.nextElement() : null;
         }
 
         @Override
@@ -398,6 +445,10 @@ public final class NativeCodeImpl implements NativeCode {
         @Override
         public File getLibraryLocation() throws IOException {
             if (libraryFile == null) {
+                URL libURL = findLibraryURL();
+                if (libURL == null)
+                    return null;
+
                 // Create a unique local file location
                 libraryFile = getUniqueLibraryFile(hostBundle, libpath);
                 libraryFile.deleteOnExit();

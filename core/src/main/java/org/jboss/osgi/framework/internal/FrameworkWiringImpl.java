@@ -330,8 +330,12 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             LOGGER.debugf(ex, "Cannot resolve: %s", resolvableRevisions);
             result = false;
         } catch (ResolverHookException ex) {
+            // The specified bundles that were resolved before stay resolved
             LOGGER.debugf(ex, "Cannot resolve: %s", resolvableRevisions);
-            result = false;
+            for (BundleRevision aux : resolvableRevisions) {
+                if (aux.getWiring() == null)
+                    result = false;
+            }
         }
         return result;
     }
@@ -383,12 +387,17 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         Collection<BundleCapability> result = new HashSet<BundleCapability>();
 
         for (XBundle bundle : bundleManager.getBundles(null)) {
-            if (bundle.getState() == Bundle.UNINSTALLED)
-                continue;
 
-            // The current revision and the revisions that are still in use
+            // The current revision and the revisions that are still in use. Of an uninstalled bundle only the revisions
+            // that are in use are left until the refresh (removal pending)
             Set<BundleRevision> brevs = new LinkedHashSet<BundleRevision>();
-            brevs.add(bundle.getBundleRevision());
+            if (bundle.getState() != Bundle.UNINSTALLED) {
+                brevs.add(bundle.getBundleRevision());
+            } else {
+                BundleWiring wiring = bundle.getBundleRevision().getWiring();
+                if (wiring != null && wiring.isInUse())
+                    brevs.add(bundle.getBundleRevision());
+            }
             BundleRevisions revisions = bundle.adapt(BundleRevisions.class);
             if (revisions != null) {
                 for (BundleRevision brev : revisions.getRevisions()) {

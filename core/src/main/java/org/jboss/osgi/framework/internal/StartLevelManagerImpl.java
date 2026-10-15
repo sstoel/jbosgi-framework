@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.jboss.osgi.framework.spi.BundleManager;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.StartLevelManager;
+import org.jboss.osgi.framework.spi.StorageManager;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.spi.AttachmentKey;
@@ -59,6 +60,8 @@ public final class StartLevelManagerImpl implements StartLevelManager {
     private final ExecutorService executorService;
     private final AtomicBoolean immediateExecution;
     private AtomicInteger initialBundleStartLevel = new AtomicInteger(1);
+    private volatile boolean initialStartLevelRestored;
+    private final Object initialStartLevelLock = new Object();
     private AtomicInteger startLevel = new AtomicInteger(0);
     private AtomicBoolean changingStartLevel = new AtomicBoolean();
 
@@ -277,12 +280,45 @@ public final class StartLevelManagerImpl implements StartLevelManager {
 
     @Override
     public int getInitialBundleStartLevel() {
+        restoreInitialBundleStartLevel();
         return initialBundleStartLevel.get();
     }
 
     @Override
     public void setInitialBundleStartLevel(int startlevel) {
-        initialBundleStartLevel.set(startlevel);
+        StorageManagerImpl storageManager = getStorageManagerImpl();
+        synchronized (initialStartLevelLock) {
+            initialStartLevelRestored = true;
+            initialBundleStartLevel.set(startlevel);
+            if (storageManager != null)
+                storageManager.storeInitialBundleStartLevel(startlevel);
+        }
+    }
+
+    // The initial bundle start level that was set before the framework was launched again
+    private void restoreInitialBundleStartLevel() {
+        if (initialStartLevelRestored)
+            return;
+        StorageManagerImpl storageManager = getStorageManagerImpl();
+        int startlevel = storageManager != null ? storageManager.getStoredInitialBundleStartLevel() : -1;
+        if (startlevel < 0)
+            return;
+        synchronized (initialStartLevelLock) {
+            if (initialStartLevelRestored == false) {
+                if (startlevel > 0)
+                    initialBundleStartLevel.set(startlevel);
+                initialStartLevelRestored = true;
+            }
+        }
+    }
+
+    private StorageManagerImpl getStorageManagerImpl() {
+        try {
+            StorageManager storageManager = bundleManager.getFrameworkState().getStorageManager();
+            return storageManager instanceof StorageManagerImpl ? (StorageManagerImpl) storageManager : null;
+        } catch (RuntimeException ex) {
+            return null;
+        }
     }
 
     @Override

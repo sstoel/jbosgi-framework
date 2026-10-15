@@ -26,6 +26,7 @@ import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -168,6 +169,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     }
 
     void activateLazily() throws BundleException {
+        // No lazy activation while the framework is shutting down: the bundle stays STARTING
+        if (getBundleManager().getManagerState() == Bundle.STOPPING)
+            return;
         if (getState() == STARTING && awaitLazyActivation.getAndSet(false)) {
             if (startLevelValidForStart() == true) {
                 // The declared activation policy was applied when the bundle was started, the trigger activates it
@@ -268,11 +272,16 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     }
 
     @Override
-    boolean updateInternal(InputStream input) throws BundleException {
+    int updateInternal(InputStream input) throws BundleException {
 
         LOGGER.debugf("Updating bundle: %s", this);
 
         boolean restart = false;
+        // A bundle that is started with its declared activation policy is started that way again: a lazily started
+        // bundle waits for its activation again
+        int restartOptions = Bundle.START_TRANSIENT;
+        if (adapt(BundleStartLevel.class).isActivationPolicyUsed())
+            restartOptions |= Bundle.START_ACTIVATION_POLICY;
 
         if (isFragment() == false) {
             int state = getState();
@@ -289,9 +298,21 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         // version of this bundle must be restored and a BundleException must be thrown after
         // completion of the remaining steps. The state changes only when the update revision exists.
         UserBundleRevision currentRev = getBundleRevision();
+
+        // Without an input stream the module connector of a connect framework decides whether the update is a connect
+        // bundle. An exception of the connector propagates as it is (60.4.1)
+        VirtualFile connectRoot;
+        try {
+            connectRoot = input == null ? getBundleManager().connect(getLocation()) : null;
+        } catch (BundleException | RuntimeException ex) {
+            if (restart)
+                getBundleManager().startBundle(this, restartOptions);
+            throw ex;
+        }
+
         try {
             // Create the update revision
-            createUpdateRevision(input);
+            createUpdateRevision(input, connectRoot);
 
             // The bundle is INSTALLED with its new revision, a resolved bundle is unresolved
             boolean wasResolved = getState() != Bundle.INSTALLED;
@@ -307,12 +328,25 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             boolean isbe = (ex instanceof BundleException);
             BundleException be = isbe ? (BundleException) ex : MESSAGES.cannotUpdateBundle(ex, this);
             if (restart)
-                getBundleManager().startBundle(this, Bundle.START_TRANSIENT);
+                getBundleManager().startBundle(this, restartOptions);
             throw be;
         }
 
         FrameworkEvents eventsPlugin = getFrameworkState().getFrameworkEvents();
         eventsPlugin.fireBundleEvent(this, BundleEvent.UPDATED);
+
+        // The replaced revision is removed now when nothing uses it, its content is closed; a revision in use is removal
+        // pending until the next refresh
+        BundleWiring oldWiring = currentRev.getWiringSupport().getWiring(false);
+        boolean inUse = oldWiring != null && (oldWiring.isInUse() || getFrameworkState().getFrameworkModuleLoader().isModuleInUse(currentRev));
+        if (inUse == false && currentRev != getBundleRevision()) {
+            // Its module and class loader are removed with it, as a refresh does
+            if (currentRev.isFragment() == false) {
+                ModuleManager moduleManager = getFrameworkState().getModuleManager();
+                moduleManager.removeModule(currentRev, moduleManager.getModuleIdentifier(currentRev));
+            }
+            getBundleManager().removeRevisionLifecycle(currentRev, 0);
+        }
 
         updateLastModified();
 
@@ -320,7 +354,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
         // If this bundle's state was originally ACTIVE or STARTING, the updated bundle is started like with Bundle.start,
         // through the bundle lifecycle: an integration may have to activate the deployment of the new revision
-        return restart;
+        return restart ? restartOptions : -1;
     }
 
     /**
@@ -330,7 +364,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
      *              the same location as where the bundle was initially installed.
      * @throws Exception If the bundle cannot be read, or if the update attempt to change the BSN.
      */
-    private UserBundleRevision createUpdateRevision(InputStream input) throws IOException, BundleException {
+    private UserBundleRevision createUpdateRevision(InputStream input, VirtualFile connectRoot) throws IOException, BundleException {
 
         String updateLocation = getOSGiMetaData().getHeader(Constants.BUNDLE_UPDATELOCATION);
 
@@ -338,18 +372,18 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         // which to read the updated bundle by interpreting, in an implementation dependent manner,
         // this bundle's Bundle-UpdateLocation Manifest header, if present, or this bundle's
         // original location.
-        VirtualFile rootFile = null;
-
-        // Without an input stream the module connector of a connect framework decides whether the update is a connect bundle
-        if (input == null)
-            rootFile = getBundleManager().connect(getLocation());
+        VirtualFile rootFile = connectRoot;
 
         if (rootFile == null && input == null) {
             if (updateLocation != null) {
                 URL updateURL = new URL(updateLocation);
                 rootFile = AbstractVFS.toVirtualFile(updateURL);
             } else {
-                rootFile = getDeployment().getRoot();
+                // The content at the original location, like at install. A location that is not a URL that can be
+                // read gives the current content
+                rootFile = getContentAtLocation();
+                if (rootFile == null)
+                    rootFile = getCopyOfContent(getDeployment().getRoot());
             }
         }
 
@@ -377,6 +411,36 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return UserBundleRevision.assertBundleRevision(brev);
     }
 
+    // The revisions do not share their content, the content of the replaced revision is closed when it is removed
+    private static VirtualFile getCopyOfContent(VirtualFile rootFile) throws IOException {
+        InputStream input = rootFile.openStream();
+        try {
+            return AbstractVFS.toVirtualFile(input);
+        } finally {
+            input.close();
+        }
+    }
+
+    private VirtualFile getContentAtLocation() {
+        URL locationURL;
+        try {
+            locationURL = new URL(getLocation());
+        } catch (MalformedURLException ex) {
+            return null;
+        }
+        try {
+            InputStream input = locationURL.openStream();
+            try {
+                return AbstractVFS.toVirtualFile(input);
+            } finally {
+                input.close();
+            }
+        } catch (IOException ex) {
+            LOGGER.debugf(ex, "Cannot read the update from the location of: %s", this);
+            return null;
+        }
+    }
+
     private StorageState createUpdateStorageState(String location, VirtualFile rootFile) throws BundleException {
         StorageState storageState;
         try {
@@ -402,6 +466,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         CoreServices coreServices = getFrameworkState().getCoreServices();
         BundleLifecycle bundleLifecycle = coreServices.getBundleLifecycle();
         BundleRefreshPolicy refreshPolicy = bundleLifecycle.getBundleRefreshPolicy();
+
+        // Only a resolved bundle becomes unresolved
+        boolean wasResolved = getState() != Bundle.INSTALLED;
 
         // Remove the {@link Module} and the associated ClassLoader
         BundleManagerPlugin bundleManager = getBundleManager();
@@ -433,13 +500,15 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             revisionIndex.set(1);
 
             FrameworkEvents eventsPlugin = getFrameworkState().getFrameworkEvents();
-            eventsPlugin.fireBundleEvent(this, BundleEvent.UNRESOLVED);
+            if (wasResolved)
+                eventsPlugin.fireBundleEvent(this, BundleEvent.UNRESOLVED);
 
             refreshPolicy.refreshCurrentRevision(currentRev);
 
             // The integration may have resolved the new revision already, when other modules need its module
             XBundleRevision newRev = getBundleRevision();
-            changeState(newRev != currentRev && newRev.getWiring() != null ? Bundle.RESOLVED : Bundle.INSTALLED);
+            // The refreshed bundle is not installed again: no INSTALLED event
+            changeState(newRev != currentRev && newRev.getWiring() != null ? Bundle.RESOLVED : Bundle.INSTALLED, 0);
         } finally {
             refreshPolicy.endBundleRefresh(this);
         }
@@ -455,8 +524,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     void uninstallInternal(int options) throws BundleException {
 
         int state = getState();
-        if (state == Bundle.UNINSTALLED)
+        if (state == Bundle.UNINSTALLED) {
+            // Bundle.uninstall of a bundle that another thread uninstalled while this one waited for the lock
+            if ((options & InternalConstants.UNINSTALL_INTERNAL) != 0)
+                throw MESSAGES.illegalStateBundleAlreadyUninstalled(this);
             return;
+        }
 
         LOGGER.debugf("Uninstalling bundle: %s", this);
 
@@ -483,10 +556,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         else
             LOGGER.debugf("Has active wires: %s", this);
 
-        // Make the current {@link BundleWiring} uneffective and fire the UNRESOLVED event
+        // Make the current {@link BundleWiring} uneffective and fire the UNRESOLVED event of a resolved bundle
+        boolean wasResolved = getState() != Bundle.INSTALLED;
         getBundleRevision().getWiringSupport().makeUneffective();
         FrameworkEvents eventsPlugin = getFrameworkState().getFrameworkEvents();
-        eventsPlugin.fireBundleEvent(this, BundleEvent.UNRESOLVED);
+        if (wasResolved)
+            eventsPlugin.fireBundleEvent(this, BundleEvent.UNRESOLVED);
 
         // #3 This bundle's state is set to UNINSTALLED
         changeState(Bundle.UNINSTALLED, 0);
@@ -554,6 +629,25 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return new UserBundleContext(this);
     }
 
+    // The event of a start of this thread that is fired when the locks of the start are released: a synchronous
+    // listener of the event can stop the bundle in another thread (Core 10.1.31)
+    private static final ThreadLocal<Object[]> deferredStartEvent = new ThreadLocal<Object[]>();
+
+    private void deferStartEvent(int type) {
+        deferredStartEvent.set(new Object[] { this, type });
+    }
+
+    /**
+     * The event type of the start of the bundle by this thread that is still to be fired, or null
+     */
+    static Integer takeDeferredStartEvent(XBundle bundle) {
+        Object[] event = deferredStartEvent.get();
+        if (event == null || event[0] != bundle)
+            return null;
+        deferredStartEvent.remove();
+        return (Integer) event[1];
+    }
+
     @Override
     void startInternal(int options) throws BundleException {
 
@@ -615,7 +709,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             // #5.3 A bundle event of type BundleEvent.LAZY_ACTIVATION is fired
             // The bundle now awaits its activation by the first class load (4.4.6.2)
             awaitLazyActivation.set(true);
-            changeState(STARTING, BundleEvent.LAZY_ACTIVATION);
+            changeState(STARTING, 0);
+            deferStartEvent(BundleEvent.LAZY_ACTIVATION);
             return;
         }
         awaitLazyActivation.set(false);
@@ -680,8 +775,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             throw MESSAGES.uninstalledDuringActivatorStart(this);
 
         // #10 This bundle's state is set to ACTIVE.
-        // #11 A bundle event of type BundleEvent.STARTED is fired
-        changeState(Bundle.ACTIVE);
+        // #11 A bundle event of type BundleEvent.STARTED is fired, after the state change lock is released
+        changeState(Bundle.ACTIVE, 0);
+        deferStartEvent(BundleEvent.STARTED);
 
         LOGGER.infoBundleStarted(this);
     }
@@ -804,7 +900,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             // If the START_TRANSIENT option is set, then a BundleException is thrown
             // indicating this bundle cannot be started due to the Framework's current start level
             if ((options & START_TRANSIENT) != 0)
-                throw MESSAGES.cannotStartBundleDueToStartLevel();
+                throw new BundleException(MESSAGES.cannotStartBundleDueToStartLevel(), BundleException.START_TRANSIENT_ERROR);
 
             // Set this bundle's autostart setting
             persistAutoStartSettings(options);

@@ -26,6 +26,7 @@ import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 import static org.jboss.osgi.framework.internal.InternalConstants.REVISION_IDENTIFIER_KEY;
 import static org.jboss.osgi.framework.spi.IntegrationConstants.STORAGE_STATE_KEY;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.AccessController;
@@ -75,6 +76,7 @@ import org.jboss.osgi.framework.spi.FrameworkStartLevelSupport;
 import org.jboss.osgi.framework.spi.FrameworkWiringLock;
 import org.jboss.osgi.framework.spi.IntegrationConstants;
 import org.jboss.osgi.framework.spi.IntegrationServices;
+import org.jboss.osgi.framework.spi.LockException;
 import org.jboss.osgi.framework.spi.LockManager;
 import org.jboss.osgi.framework.spi.LockManager.LockContext;
 import org.jboss.osgi.framework.spi.LockManager.LockableItem;
@@ -83,6 +85,7 @@ import org.jboss.osgi.framework.spi.ModuleManager;
 import org.jboss.osgi.framework.spi.StorageManager;
 import org.jboss.osgi.framework.spi.StorageState;
 import org.jboss.osgi.metadata.OSGiMetaData;
+import org.jboss.osgi.metadata.ParameterizedAttribute;
 import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.jboss.osgi.resolver.XEnvironment;
@@ -204,8 +207,6 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             setProperty(Constants.FRAMEWORK_OS_VERSION, OSGi_FRAMEWORK_OS_VERSION);
         if (getProperty(Constants.FRAMEWORK_PROCESSOR) == null)
             setProperty(Constants.FRAMEWORK_PROCESSOR, OSGi_FRAMEWORK_PROCESSOR);
-        if (getProperty(Constants.FRAMEWORK_UUID) == null)
-            setProperty(Constants.FRAMEWORK_UUID, UUID.randomUUID().toString());
         if (getProperty(Constants.FRAMEWORK_BSNVERSION) == null)
             setProperty(Constants.FRAMEWORK_BSNVERSION, Constants.FRAMEWORK_BSNVERSION_MANAGED);
         if (getProperty(Constants.FRAMEWORK_STORAGE) == null)
@@ -213,8 +214,13 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (getProperty(Constants.FRAMEWORK_SYSTEMPACKAGES) == null)
             setProperty(Constants.FRAMEWORK_SYSTEMPACKAGES, String.join(",", SystemPathsImpl.getDefaultSystemPackages()));
 
+        // The fixed properties are set by the framework, whatever the configuration contains. A new framework
+        // instance gets a new UUID (4.2.2)
         setProperty(Constants.FRAMEWORK_VENDOR, OSGi_FRAMEWORK_VENDOR);
         setProperty(Constants.FRAMEWORK_VERSION, OSGi_FRAMEWORK_VERSION);
+        setProperty(Constants.FRAMEWORK_UUID, UUID.randomUUID().toString());
+        setProperty(Constants.SUPPORTS_FRAMEWORK_FRAGMENT, "true");
+        setProperty(Constants.SUPPORTS_FRAMEWORK_REQUIREBUNDLE, "true");
 
         // Get and cache the BSNVERSION
         uniquenessPolicy = UniquenessPolicy.valueOf((String) getProperty(Constants.FRAMEWORK_BSNVERSION));
@@ -361,6 +367,11 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     static Version getFrameworkVersion() {
         Version version;
         String versionSpec = BundleManagerPlugin.class.getPackage().getImplementationVersion();
+        // Without the Implementation-Version, e.g. in a jar that combines several jars, the Maven properties of the jar
+        if (versionSpec == null)
+            versionSpec = getMavenVersion();
+        if (versionSpec == null)
+            return Version.emptyVersion;
         try {
             version = Version.parseVersion(versionSpec);
         } catch (IllegalArgumentException ex) {
@@ -370,6 +381,23 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             version = Version.parseVersion(versionSpec);
         }
         return version;
+    }
+
+    private static String getMavenVersion() {
+        InputStream input = BundleManagerPlugin.class.getResourceAsStream("/META-INF/maven/org.jboss.osgi.framework/jbosgi-framework-core/pom.properties");
+        if (input == null)
+            return null;
+        try {
+            try {
+                Properties props = new Properties();
+                props.load(input);
+                return props.getProperty("version");
+            } finally {
+                input.close();
+            }
+        } catch (IOException ex) {
+            return null;
+        }
     }
 
     int getManagerState() {
@@ -410,6 +438,24 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
      */
     Object getConfiguredProperty(String key) {
         return properties.get(key);
+    }
+
+    /**
+     * The launching properties: the configuration properties plus the defaults and the fixed properties of the
+     * framework (4.2.2), without the system properties that only BundleContext.getProperty falls back to
+     */
+    Map<String, Object> getLaunchingProperties() {
+        Map<String, Object> result = new HashMap<String, Object>(properties);
+        // A default that was not set because the system property defines it
+        for (String key : new String[] { Constants.FRAMEWORK_EXECUTIONENVIRONMENT, Constants.FRAMEWORK_LANGUAGE, Constants.FRAMEWORK_OS_NAME,
+                Constants.FRAMEWORK_OS_VERSION, Constants.FRAMEWORK_PROCESSOR }) {
+            if (result.containsKey(key) == false) {
+                Object value = getProperty(key);
+                if (value != null)
+                    result.put(key, value);
+            }
+        }
+        return result;
     }
 
     @Override
@@ -477,7 +523,8 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     @Override
     public XBundle getBundleByLocation(String location) {
         assert location != null : "Null location";
-        if (Constants.SYSTEM_BUNDLE_LOCATION.equals(location)) {
+        // The location of the system bundle, also by the location that it had before (JBOSGI_FRAMEWORK_LOCATION)
+        if (Constants.SYSTEM_BUNDLE_LOCATION.equals(location) || Constants.JBOSGI_FRAMEWORK_LOCATION.equals(location)) {
             return getSystemBundle();
         }
         for (XBundle aux : getBundles()) {
@@ -549,6 +596,24 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (serviceTarget == null)
             serviceTarget = getServiceTarget();
 
+        // The installs of a symbolic name are serialized: the uniqueness check and the creation of the bundle are one
+        // step, two concurrent installs of the same name and version cannot both pass the check
+        String symbolicName = deployment.getSymbolicName();
+        String nameKey = "bsn:" + symbolicName;
+        Object nameLock = symbolicName != null && isUpdateOrRefresh(deployment) == false ? acquireInstallLock(nameKey) : null;
+        try {
+            if (nameLock == null)
+                return installBundleRevisionInternal(context, deployment, serviceTarget);
+            synchronized (nameLock) {
+                return installBundleRevisionInternal(context, deployment, serviceTarget);
+            }
+        } finally {
+            if (nameLock != null)
+                releaseInstallLock(nameKey, nameLock);
+        }
+    }
+
+    private XBundleRevision installBundleRevisionInternal(BundleContext context, Deployment deployment, ServiceTarget serviceTarget) throws BundleException {
         String symbolicName = deployment.getSymbolicName();
         Version version = Version.parseVersion(deployment.getVersion());
 
@@ -595,8 +660,16 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             if (metadata.getBundleManifestVersion() > 1)
                 BundleManifestSyntaxValidator.validate(metadata, deployment.getLocation());
 
+            // A Fragment-Host that cannot be parsed is a manifest error
+            ParameterizedAttribute fragmentHost;
+            try {
+                fragmentHost = metadata.getFragmentHost();
+            } catch (RuntimeException ex) {
+                throw new BundleException(ex.getMessage(), BundleException.MANIFEST_ERROR, ex);
+            }
+
             // Create the bundle revision
-            if (metadata.getFragmentHost() == null) {
+            if (fragmentHost == null) {
                 brev = new HostBundleRevisionFactory(getFrameworkState(), context, deployment, serviceTarget).create();
             } else {
                 brev = new FragmentBundleRevisionFactory(getFrameworkState(), context, deployment, serviceTarget).create();
@@ -654,6 +727,33 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         }
     }
 
+    /**
+     * Take the locks of a bundle state change: a lock that cannot be obtained in time fails the state change with a
+     * BundleException (STATECHANGE_ERROR), as the Bundle methods specify
+     */
+    private static LockContext lockForStateChange(LockManager lockManager, Method method, LockableItem... items) throws BundleException {
+        try {
+            return lockManager.lockItems(method, items);
+        } catch (LockException ex) {
+            throw new BundleException(ex.getMessage(), BundleException.STATECHANGE_ERROR, ex);
+        }
+    }
+
+    private static void awaitUninterruptibly(ExecutorService service, long timeout, TimeUnit unit) {
+        boolean interrupted = false;
+        long deadline = System.nanoTime() + unit.toNanos(timeout);
+        while (true) {
+            try {
+                service.awaitTermination(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+                break;
+            } catch (InterruptedException ex) {
+                interrupted = true;
+            }
+        }
+        if (interrupted)
+            Thread.currentThread().interrupt();
+    }
+
     void startBundleLifecycle(XBundle bundle, int options) throws BundleException {
         BundleLifecycle bundleLifecycle = getBundleLifecycle();
         bundleLifecycle.start(bundle, options);
@@ -663,14 +763,20 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     public void startBundle(XBundle bundle, int options) throws BundleException {
         LockManager lockManager = getFrameworkState().getLockManager();
         LockableItem[] items = getLockableItems(lockManager, Method.START, bundle);
-        LockContext lockContext =  lockManager.lockItems(Method.START, items);
+        LockContext lockContext = lockForStateChange(lockManager, Method.START, items);
+        boolean started = false;
         try {
             AbstractBundleState.assertBundleState(bundle).startInternal(options);
+            started = true;
         } catch (BundleException ex) {
             LOGGER.debugf(ex, "Cannot start bundle: %s", bundle);
             throw ex;
         } finally {
             lockManager.unlockItems(lockContext);
+            // The STARTED and LAZY_ACTIVATION events are delivered after the state change lock is released
+            Integer deferred = UserBundleState.takeDeferredStartEvent(bundle);
+            if (started && deferred != null)
+                getFrameworkState().getFrameworkEvents().fireBundleEvent(bundle, deferred);
         }
     }
 
@@ -684,7 +790,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         LockManager lockManager = getFrameworkState().getLockManager();
 
         LockableItem[] items = getLockableItems(lockManager, Method.STOP, bundle);
-        LockContext lockContext = lockManager.lockItems(Method.STOP, items);
+        LockContext lockContext = lockForStateChange(lockManager, Method.STOP, items);
         try {
             AbstractBundleState.assertBundleState(bundle).stopInternal(options);
         } catch (BundleException ex) {
@@ -699,10 +805,10 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     public void updateBundle(XBundle bundle, InputStream input) throws BundleException {
         LockManager lockManager = getFrameworkState().getLockManager();
         LockableItem[] items = getLockableItems(lockManager, Method.UPDATE, bundle);
-        LockContext lockContext = lockManager.lockItems(Method.UPDATE, items);
-        boolean restart;
+        LockContext lockContext = lockForStateChange(lockManager, Method.UPDATE, items);
+        int restartOptions;
         try {
-            restart = AbstractBundleState.assertBundleState(bundle).updateInternal(input);
+            restartOptions = AbstractBundleState.assertBundleState(bundle).updateInternal(input);
         } catch (BundleException ex) {
             LOGGER.debugf(ex, "Cannot update bundle: %s", bundle);
             throw ex;
@@ -713,9 +819,9 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         // The updated bundle is started like with Bundle.start, without the locks of the update: the bundle lifecycle
         // of an integration may activate the deployment of the new revision in other threads, which take the locks of
         // the start. If Bundle.start throws an exception, a Framework event of type FrameworkEvent.ERROR is fired
-        if (restart) {
+        if (restartOptions >= 0) {
             try {
-                startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
+                startBundleLifecycle(bundle, restartOptions);
             } catch (BundleException ex) {
                 getFrameworkState().getFrameworkEvents().fireFrameworkEvent(bundle, FrameworkEvent.ERROR, ex);
             }
@@ -742,10 +848,10 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         LockManager lockManager = getFrameworkState().getLockManager();
 
         LockableItem[] items = getLockableItems(lockManager, Method.UNINSTALL, bundle);
-        LockContext lockContext = lockManager.lockItems(Method.UNINSTALL, items);
+        LockContext lockContext = lockForStateChange(lockManager, Method.UNINSTALL, items);
         try {
             items = getTransitiveLockForUninstall(lockManager, bundle);
-            LockContext transitiveClosureLock = lockManager.lockItems(Method.UNINSTALL, items);
+            LockContext transitiveClosureLock = lockForStateChange(lockManager, Method.UNINSTALL, items);
             try {
                 AbstractBundleState.assertBundleState(bundle).uninstallInternal(options);
             } finally {
@@ -845,11 +951,20 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             } catch (InvalidSyntaxException ex) {
                 // ignore
             }
-            // The hooks can only remove candidates
+            // The hooks can only remove candidates. They are called in service ranking order, highest first; a hook
+            // that cannot be obtained is skipped
             Collection<Bundle> shrinkable = new RemoveOnlyCollection<Bundle>(candidates);
-            for (ServiceReference<CollisionHook> sref : srefs) {
+            List<ServiceReference<CollisionHook>> sorted = new ArrayList<ServiceReference<CollisionHook>>(srefs != null ? srefs : Collections.<ServiceReference<CollisionHook>>emptyList());
+            Collections.sort(sorted, Collections.reverseOrder());
+            for (ServiceReference<CollisionHook> sref : sorted) {
                 CollisionHook hook = syscontext.getService(sref);
-                hook.filterCollisions(policy, targetBundle, shrinkable);
+                if (hook == null)
+                    continue;
+                try {
+                    hook.filterCollisions(policy, targetBundle, shrinkable);
+                } finally {
+                    syscontext.ungetService(sref);
+                }
             }
         }
         if (!candidates.isEmpty()) {
@@ -949,6 +1064,17 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     }
 
     /**
+     * Initialize the module connector with the storage area, once for the framework: after the storage area was cleaned
+     * (storage.clean) and before the connect bundles of the storage are restored
+     */
+    void initializeModuleConnector(File storageArea) {
+        if (frameworkBuilder instanceof FrameworkBuilderImpl && ((FrameworkBuilderImpl) frameworkBuilder).markModuleConnectorInitialized()) {
+            Map<String, String> configuration = new HashMap<String, String>(frameworkBuilder.getProperties());
+            getModuleConnector().initialize(storageArea, Collections.unmodifiableMap(configuration));
+        }
+    }
+
+    /**
      * Ask the module connector of a connect framework for the content of the bundle at the given location.
      *
      * @return null if this is not a connect framework, or when the location is not for a connect bundle
@@ -958,20 +1084,18 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (connector == null)
             return null;
 
-        Optional<ConnectModule> module;
-        try {
-            module = connector.connect(location);
-        } catch (BundleException ex) {
-            throw ex;
-        } catch (RuntimeException ex) {
-            throw MESSAGES.cannotConnectBundle(ex, location);
-        }
+        // A BundleException or an unchecked exception of the connector propagates as it is (60.4.1)
+        Optional<ConnectModule> module = connector.connect(location);
         if (module == null || module.isPresent() == false)
             return null;
 
+        // The content is obtained and opened now: a failure of the connect content, also an unchecked exception of the
+        // connector code, fails the install with a BundleException that wraps it
         try {
-            return ConnectVirtualFile.create(location, module.get(), connectContents);
-        } catch (IOException ex) {
+            ConnectVirtualFile file = ConnectVirtualFile.create(location, module.get(), connectContents);
+            file.openContent();
+            return file;
+        } catch (IOException | RuntimeException ex) {
             throw MESSAGES.cannotConnectBundle(ex, location);
         }
     }
@@ -982,6 +1106,8 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (connector == null)
             return;
 
+        // A failing activator does not fail the init: the failure is published as a framework ERROR event and the
+        // activator is not stopped (60.4.2)
         try {
             Optional<BundleActivator> activator = connector.newBundleActivator();
             if (activator != null && activator.isPresent()) {
@@ -989,7 +1115,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
                 connectActivator = activator.get();
             }
         } catch (Exception ex) {
-            throw MESSAGES.cannotStartConnectActivator(ex);
+            getFrameworkState().getFrameworkEvents().fireFrameworkEvent(getSystemBundle(), FrameworkEvent.ERROR, MESSAGES.cannotStartConnectActivator(ex));
         }
     }
 
@@ -1000,7 +1126,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             try {
                 activator.stop(getSystemBundle().getBundleContext());
             } catch (Throwable th) {
-                getFrameworkState().getFrameworkEvents().fireFrameworkEvent(getSystemBundle(), FrameworkEvent.ERROR, th);
+                getFrameworkState().getFrameworkEvents().fireFrameworkEvent(getSystemBundle(), FrameworkEvent.ERROR, MESSAGES.cannotStopConnectActivator(th));
             }
         }
     }
@@ -1062,16 +1188,18 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
                 service.shutdown();
             }
             for (ExecutorService service : executorServices) {
-                try {
-                    service.awaitTermination(10, TimeUnit.SECONDS);
-                } catch (InterruptedException ex) {
-                    // ignore
-                }
+                // An interrupt does not cut the shutdown short, the thread keeps its status
+                awaitUninterruptibly(service, 10, TimeUnit.SECONDS);
             }
         }
 
-        cachedSystemBundle = getSystemBundle();
+        // The stopped framework keeps no reference to its runtime state (bundles, class loaders): the stop event of
+        // waitForStop has the Framework object as its source
+        if (framework == null)
+            cachedSystemBundle = getSystemBundle();
         shutdownContainer.shutdown();
+        if (frameworkBuilder instanceof FrameworkBuilderImpl)
+            ((FrameworkBuilderImpl) frameworkBuilder).releaseIntegrationServices();
         setManagerState(Bundle.RESOLVED);
     }
 
@@ -1111,12 +1239,19 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         FrameworkStartLevel startLevel = getSystemBundle().adapt(FrameworkStartLevel.class);
         ((FrameworkStartLevelSupport) startLevel).shutdownFramework(listener);
 
-        // Wait for the start level event
-        try {
-            latch.await(10, TimeUnit.SECONDS);
-        } catch (InterruptedException ex) {
-            // ignore
+        // Wait for the start level event, also when the thread is interrupted; it keeps its status
+        boolean interrupted = false;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (true) {
+            try {
+                latch.await(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+                break;
+            } catch (InterruptedException ex) {
+                interrupted = true;
+            }
         }
+        if (interrupted)
+            Thread.currentThread().interrupt();
 
         // Stop the extension bundle activators before event handling is disabled
         frameworkExtensions.stopActivators();
@@ -1134,7 +1269,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
      */
     FrameworkEvent waitForStop(long timeout) throws InterruptedException {
         SystemBundleState systemBundle = getSystemBundle();
-        Bundle eventSource = systemBundle != null ? systemBundle : cachedSystemBundle;
+        Bundle eventSource = systemBundle != null ? systemBundle : framework != null ? framework : cachedSystemBundle;
 
         FrameworkEvent frameworkEvent = null;
         shutdownContainer.awaitTermination(timeout, TimeUnit.MILLISECONDS);
@@ -1152,6 +1287,8 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             public Object run() {
                 List<String> execEnvironments = new ArrayList<String>();
                 if (Java.isCompatible(Java.VERSION_1_1)) {
+                    // OSGi/Minimum-1.0 is a subset of OSGi/Minimum-1.1
+                    execEnvironments.add("OSGi/Minimum-1.0");
                     execEnvironments.add("OSGi/Minimum-1.1");
                     execEnvironments.add("J2SE-1.1");
                 }

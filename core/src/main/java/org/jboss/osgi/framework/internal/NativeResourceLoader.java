@@ -28,6 +28,8 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.LinkedHashSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.jboss.modules.ClassSpec;
@@ -42,10 +44,13 @@ import org.jboss.osgi.framework.spi.NativeLibraryProvider;
  */
 final class NativeResourceLoader implements ResourceLoader {
 
-    // List of native library providers
+    // List of native library providers, by the file name of the library
     private volatile List<NativeLibraryProvider> nativeLibraries;
+    // The extra library file extensions of org.osgi.framework.library.extensions
+    private final List<String> libraryExtensions;
 
-    NativeResourceLoader() {
+    NativeResourceLoader(List<String> libraryExtensions) {
+        this.libraryExtensions = libraryExtensions;
     }
 
     void addNativeLibrary(NativeLibraryProvider libProvider) {
@@ -61,26 +66,42 @@ final class NativeResourceLoader implements ResourceLoader {
         if (list == null)
             return null;
 
-        NativeLibraryProvider libProvider = null;
-        for (NativeLibraryProvider aux : list) {
-            if (libname.equals(aux.getLibraryName())) {
-                libProvider = aux;
-                break;
+        // The library name is mapped with System.mapLibraryName and the configured extensions, the first library of the
+        // selected clause with such a file name is used
+        Set<String> fileNames = getLibraryFileNames(libname);
+        for (NativeLibraryProvider libProvider : list) {
+            if (fileNames.contains(libProvider.getLibraryName()) == false)
+                continue;
+            File libfile;
+            try {
+                libfile = libProvider.getLibraryLocation();
+            } catch (IOException ex) {
+                LOGGER.errorCannotProvideNativeLibraryLocation(ex, libname);
+                return null;
             }
+            if (libfile != null)
+                return libfile.getAbsolutePath();
         }
+        return null;
+    }
 
-        if (libProvider == null)
-            return null;
-
-        File libfile;
-        try {
-            libfile = libProvider.getLibraryLocation();
-        } catch (IOException ex) {
-            LOGGER.errorCannotProvideNativeLibraryLocation(ex, libname);
-            return null;
+    private Set<String> getLibraryFileNames(String libname) {
+        Set<String> result = new LinkedHashSet<String>();
+        String mapped = System.mapLibraryName(libname);
+        result.add(mapped);
+        int dot = mapped.lastIndexOf('.');
+        String base = dot > 0 ? mapped.substring(0, dot) : mapped;
+        // On macOS a JNI library is a .dylib or, as it was named before Java 7, a .jnilib (as in Felix)
+        if (mapped.endsWith(".dylib"))
+            result.add(base + ".jnilib");
+        for (String extension : libraryExtensions) {
+            String ext = extension.trim();
+            if (ext.startsWith("."))
+                ext = ext.substring(1);
+            if (ext.isEmpty() == false)
+                result.add(base + "." + ext);
         }
-
-        return libfile.getAbsolutePath();
+        return result;
     }
 
     @Override

@@ -259,7 +259,7 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
                 // If the START_TRANSIENT option is set, then a BundleException is thrown
                 // indicating this bundle cannot be started due to the Framework's current start level
                 if ((options & START_TRANSIENT) != 0)
-                    throw MESSAGES.cannotStartBundleDueToStartLevel();
+                    throw new BundleException(MESSAGES.cannotStartBundleDueToStartLevel(), BundleException.START_TRANSIENT_ERROR);
 
                 int frameworkState = bundleManager.getSystemBundle().getState();
                 StartLevelManager plugin = getPluginService(IntegrationServices.START_LEVEL_PLUGIN, StartLevelManager.class);
@@ -443,7 +443,8 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
 
     @Override
     public boolean hasPermission(Object permission) {
-        return false;
+        // As for the other bundles of the framework: every permission without a security manager
+        return permission instanceof java.security.Permission;
     }
 
     @Override
@@ -497,6 +498,8 @@ public class AbstractBundleAdaptor extends AbstractElement implements XBundle, L
 
     @Override
     public Map<X509Certificate, List<X509Certificate>> getSignerCertificates(int signersType) {
+        if (signersType != SIGNERS_ALL && signersType != SIGNERS_TRUSTED)
+            throw MESSAGES.illegalArgumentInvalidSignersType(signersType);
         return Collections.emptyMap();
     }
 

@@ -151,10 +151,17 @@ abstract class UserBundleRevisionFactory<R extends UserBundleRevision> {
     }
 
     private void validateBundleRevision(R bundleRevision, OSGiMetaData metadata) throws BundleException {
-        if (metadata.getBundleManifestVersion() > 1) {
-            new BundleRevisionValidatorR4().validateBundleRevision(bundleRevision, metadata);
-        } else {
-            new BundleRevisionValidatorR3().validateBundleRevision(bundleRevision, metadata);
+        try {
+            if (metadata.getBundleManifestVersion() > 1) {
+                new BundleRevisionValidatorR4().validateBundleRevision(bundleRevision, metadata);
+            } else {
+                new BundleRevisionValidatorR3().validateBundleRevision(bundleRevision, metadata);
+            }
+        } catch (BundleException ex) {
+            // A manifest that is not valid fails the install with a MANIFEST_ERROR
+            if (ex.getType() != BundleException.UNSPECIFIED)
+                throw ex;
+            throw new BundleException(ex.getMessage(), BundleException.MANIFEST_ERROR, ex);
         }
     }
 

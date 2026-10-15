@@ -96,8 +96,9 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
     private AbstractBundleContext<? extends AbstractBundleState<?>> bundleContext;
     private Exception lastResolverException;
-    private R initialRevision;
-    private R currentRevision;
+    // Read without a lock: the current revision is set before the initial revision is cleared
+    private volatile R initialRevision;
+    private volatile R currentRevision;
 
     AbstractBundleState(FrameworkState frameworkState, R brev, long bundleId) {
         assert frameworkState != null : "Null frameworkState";
@@ -200,12 +201,17 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
 
     @Override
     public R getBundleRevision() {
-        return currentRevision != null ? currentRevision : initialRevision;
+        // The initial revision is read first: once it is cleared the current revision is set
+        R initial = initialRevision;
+        R current = currentRevision;
+        return current != null ? current : initial;
     }
 
     void addBundleRevision(R rev) {
         rev.setBundle(this);
         currentRevision = rev;
+        // The bundle only references its current revision, a replaced revision is collectable once it is removed
+        initialRevision = null;
     }
 
     abstract R getBundleRevisionById(int revisionId);
@@ -535,10 +541,10 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
     /**
      * Update the bundle under the locks of the update.
      *
-     * @return true if the bundle was stopped for the update and must be started again: that start goes through the
-     *         bundle lifecycle, without the locks of the update
+     * @return the options to start the bundle with again if it was stopped for the update, -1 otherwise: that start
+     *         goes through the bundle lifecycle, without the locks of the update
      */
-    abstract boolean updateInternal(InputStream input) throws BundleException;
+    abstract int updateInternal(InputStream input) throws BundleException;
 
     @Override
     public void uninstall() throws BundleException {

@@ -24,8 +24,10 @@ package org.jboss.osgi.framework.internal;
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 
 import java.io.File;
-import java.net.MalformedURLException;
+import java.io.IOException;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -108,7 +110,14 @@ final class FrameworkExtensions {
         if (res instanceof FragmentBundleRevision == false)
             return false;
         String fragmentHost = ((FragmentBundleRevision) res).getOSGiMetaData().getFragmentHost().getAttribute();
-        return Constants.SYSTEM_BUNDLE_SYMBOLICNAME.equals(fragmentHost);
+        return isSystemBundleName(fragmentHost);
+    }
+
+    /**
+     * True if the name is the symbolic name of the system bundle: its implementation name or the alias system.bundle
+     */
+    static boolean isSystemBundleName(String symbolicName) {
+        return Constants.SYSTEM_BUNDLE_SYMBOLICNAME.equals(symbolicName) || org.jboss.osgi.framework.Constants.JBOSGI_FRAMEWORK_SYMBOLIC_NAME.equals(symbolicName);
     }
 
     /**
@@ -189,8 +198,11 @@ final class FrameworkExtensions {
         try {
             XBundleRevision sysrev = bundleManager.getSystemBundle().getBundleRevision();
 
-            // An extension may depend on another extension that is attached in the same operation
+            // An extension may depend on another extension that is attached in the same operation. First the
+            // extensions whose requirements can be satisfied are determined, then they are attached in the order of
+            // their bundle ids, which is the order of the framework class path (3.15.2)
             List<FragmentBundleRevision> candidates = getCandidates();
+            Map<FragmentBundleRevision, List<Wire>[]> selected = new LinkedHashMap<FragmentBundleRevision, List<Wire>[]>();
             boolean progress = true;
             while (progress && candidates.isEmpty() == false) {
                 progress = false;
@@ -200,6 +212,7 @@ final class FrameworkExtensions {
                     synchronized (attached) {
                         providers.addAll(attached);
                     }
+                    providers.addAll(selected.keySet());
                     // The capabilities of the extension are those of the system bundle once it is attached,
                     // an extension can import a package that it exports (3.8.1)
                     providers.add(fragRev);
@@ -209,23 +222,39 @@ final class FrameworkExtensions {
                     if (getWires(fragRev, sysrev, providers, extwires, hostedwires) == false)
                         continue;
 
-                    attach(fragRev);
-
-                    Map<Resource, List<Wire>> wiremap = new LinkedHashMap<Resource, List<Wire>>();
-                    wiremap.put(fragRev, extwires);
-                    if (hostedwires.isEmpty() == false)
-                        wiremap.put(sysrev, hostedwires);
-                    bundleManager.getFrameworkState().getEnvironment().updateWiring(wiremap);
-
-                    fragRev.getBundleState().changeState(Bundle.RESOLVED, 0);
-                    result.put(fragRev, extwires);
-                    resolved.add(fragRev);
+                    @SuppressWarnings("unchecked")
+                    List<Wire>[] wires = new List[] { extwires, hostedwires };
+                    selected.put(fragRev, wires);
                     candidates.remove(fragRev);
                     progress = true;
                 }
             }
             for (FragmentBundleRevision fragRev : candidates)
                 LOGGER.debugf("Cannot resolve framework extension: %s", fragRev);
+
+            List<FragmentBundleRevision> ordered = new ArrayList<FragmentBundleRevision>(selected.keySet());
+            Collections.sort(ordered, new Comparator<FragmentBundleRevision>() {
+                @Override
+                public int compare(FragmentBundleRevision rev1, FragmentBundleRevision rev2) {
+                    return Long.compare(rev1.getBundle().getBundleId(), rev2.getBundle().getBundleId());
+                }
+            });
+            for (FragmentBundleRevision fragRev : ordered) {
+                List<Wire> extwires = selected.get(fragRev)[0];
+                List<Wire> hostedwires = selected.get(fragRev)[1];
+
+                attach(fragRev);
+
+                Map<Resource, List<Wire>> wiremap = new LinkedHashMap<Resource, List<Wire>>();
+                wiremap.put(fragRev, extwires);
+                if (hostedwires.isEmpty() == false)
+                    wiremap.put(sysrev, hostedwires);
+                bundleManager.getFrameworkState().getEnvironment().updateWiring(wiremap);
+
+                fragRev.getBundleState().changeState(Bundle.RESOLVED, 0);
+                result.put(fragRev, extwires);
+                resolved.add(fragRev);
+            }
         } finally {
             lockManager.unlockItems(lockContext);
         }
@@ -329,6 +358,12 @@ final class FrameworkExtensions {
     private void attach(FragmentBundleRevision fragRev) {
         FrameworkModuleProvider moduleProvider = getModuleProvider();
         for (RevisionContent revContent : fragRev.getClassPathContent()) {
+            // The connector of a connect framework provides the classes of a connect extension itself, the framework
+            // does not load anything from its content (60.3.6)
+            if (ConnectVirtualFile.isConnectFile(revContent.getVirtualFile())) {
+                LOGGER.debugf("Connect extension content is not added to the framework: %s", revContent);
+                continue;
+            }
             VirtualFileResourceLoader loader = new VirtualFileResourceLoader(revContent.getVirtualFile(), revContent.getVersionedRoots(), revContent.isMultiRelease());
             // Only the bundle jar itself can be appended to a class path
             URL contentURL = revContent.getContentId() == 0 ? getContentURL(fragRev) : null;
@@ -348,9 +383,22 @@ final class FrameworkExtensions {
         if (fileName == null)
             return null;
         File file = new File(storageState.getStorageDir(), fileName);
+        if (file.isFile() == false)
+            return null;
+        // A class loader ignores a URL that is on its class path already and keeps a jar that it opened. A framework
+        // that is launched again in the same JVM, e.g. after the storage was cleaned, appends its content under a name
+        // that is unique for the framework instance
+        File copy = new File(storageState.getStorageDir(), "extension-" + bundleManager.getProperty(Constants.FRAMEWORK_UUID) + ".jar");
         try {
-            return file.isFile() ? file.toURI().toURL() : null;
-        } catch (MalformedURLException ex) {
+            File[] previous = storageState.getStorageDir().listFiles();
+            for (File aux : previous != null ? previous : new File[0]) {
+                if (aux.getName().startsWith("extension-") && aux.getName().endsWith(".jar") && aux.equals(copy) == false)
+                    aux.delete();
+            }
+            Files.copy(file.toPath(), copy.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            return copy.toURI().toURL();
+        } catch (IOException ex) {
+            LOGGER.debugf(ex, "Cannot copy the content of extension: %s", fragRev);
             return null;
         }
     }

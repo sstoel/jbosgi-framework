@@ -93,6 +93,11 @@ abstract class BundleStateRevision extends AbstractCommonBundleRevision {
                     // The builder copies the attributes, the native capability needs the live view
                     if (brev instanceof SystemBundleRevision && NativeNamespace.NATIVE_NAMESPACE.equals(namespace))
                         atts = NativeNamespaceSupport.getCapabilityAttributes(frameworkState.getBundleManager());
+                    // The bundle and host capabilities of the system bundle have the alias system.bundle (3.9.1)
+                    if (brev instanceof SystemBundleRevision && (BundleNamespace.BUNDLE_NAMESPACE.equals(namespace) || HostNamespace.HOST_NAMESPACE.equals(namespace))) {
+                        atts = new LinkedHashMap<String, Object>(atts);
+                        atts.put(namespace, Arrays.asList(String.valueOf(atts.get(namespace)), org.osgi.framework.Constants.SYSTEM_BUNDLE_SYMBOLICNAME));
+                    }
                     // The identity, bundle and host capabilities of a connect bundle are tagged
                     if (CONNECT_TAGGED_NAMESPACES.contains(namespace) && storageState.isConnectBundle()) {
                         atts = new LinkedHashMap<String, Object>(atts);
@@ -118,7 +123,7 @@ abstract class BundleStateRevision extends AbstractCommonBundleRevision {
             }
             builder.getResource();
         } catch (ResourceBuilderException ex) {
-            throw new BundleException(ex.getMessage(), ex);
+            throw new BundleException(ex.getMessage(), BundleException.MANIFEST_ERROR, ex);
         }
 
         putAttachment(IntegrationConstants.STORAGE_STATE_KEY, storageState);

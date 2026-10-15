@@ -128,8 +128,9 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
     @SuppressWarnings("deprecation")
     private OSGiMetaData createMetaData(BundleManagerPlugin bundleManager) {
 
-        // Initialize the OSGiMetaData
-        OSGiMetaDataBuilder builder = OSGiMetaDataBuilder.createBuilder(Constants.SYSTEM_BUNDLE_SYMBOLICNAME, Version.emptyVersion);
+        // Initialize the OSGiMetaData with the implementation name and version of the framework, the capabilities add
+        // the system.bundle alias
+        OSGiMetaDataBuilder builder = OSGiMetaDataBuilder.createBuilder(Constants.JBOSGI_FRAMEWORK_SYMBOLIC_NAME, BundleManagerPlugin.getFrameworkVersion());
         SystemPaths systemPaths = frameworkState.getSystemPaths();
 
         // Construct framework capabilities from system packages
@@ -142,8 +143,11 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
         builder.addProvidedCapabilities("osgi.service;objectClass:List<String>=\"org.osgi.service.log.LogReaderService\";uses:=\"org.osgi.service.log\"");
         builder.addProvidedCapabilities("osgi.service;objectClass:List<String>=\"org.osgi.service.log.admin.LoggerAdmin\";uses:=\"org.osgi.service.log.admin\"");
 
+        // The configured system capabilities replace the osgi.ee capabilities that the framework calculates (4.2.2)
+        String configuredCaps = (String) bundleManager.getProperty(Constants.FRAMEWORK_SYSTEMCAPABILITIES);
+
         // Add framework system capabilities
-        String syscaps = (String) bundleManager.getProperty(Constants.FRAMEWORK_EXECUTIONENVIRONMENT);
+        String syscaps = configuredCaps == null ? (String) bundleManager.getProperty(Constants.FRAMEWORK_EXECUTIONENVIRONMENT) : null;
         if (syscaps != null) {
             Map<String, List<String>> nameversion = new LinkedHashMap<String, List<String>>();
             for (String piece : ElementParser.parseDelimitedString(syscaps, ',')) {
@@ -191,7 +195,7 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
                     builder.addProvidedCapabilities(capspec);
                 }
             }
-        } else {
+        } else if (configuredCaps == null) {
             // Register capabilities for the OSGi/Minimim execution environments the Framework is known to be backward compatible with
             String capspec = EXECUTION_ENVIRONMENT_NAMESPACE + ";" + EXECUTION_ENVIRONMENT_NAMESPACE + "=\"OSGi/Minimum\";version:List<Version>=\"";
             String vlist = "";
@@ -234,9 +238,8 @@ final class SystemBundlePlugin extends AbstractIntegrationService<SystemBundleSt
         }
 
         // Add framework system capabilities
-        syscaps = (String) bundleManager.getProperty(Constants.FRAMEWORK_SYSTEMCAPABILITIES);
-        if (syscaps != null) {
-            List<String> pieces = ElementParser.parseDelimitedString(syscaps, ',');
+        if (configuredCaps != null) {
+            List<String> pieces = ElementParser.parseDelimitedString(configuredCaps, ',');
             builder.addProvidedCapabilities(pieces.toArray(new String[pieces.size()]));
         }
 
