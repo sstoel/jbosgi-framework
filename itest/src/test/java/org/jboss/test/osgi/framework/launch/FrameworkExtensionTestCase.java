@@ -23,7 +23,6 @@ package org.jboss.test.osgi.framework.launch;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -104,11 +103,11 @@ public class FrameworkExtensionTestCase extends AbstractFrameworkLaunchTest {
         assertEquals(1, hostWires.size());
         assertEquals(framework.getBundleContext().getBundle(0), hostWires.get(0).getProviderWiring().getBundle());
 
-        // Its classes are loaded by the framework, not by the extension bundle
+        // Its classes are loaded by the class loader of the framework implementation, as if the extension was on its
+        // class path (Core 3.15), not by the extension bundle
         Class<?> clazz = framework.loadClass(TYPE_NAME);
         assertEquals("versioned", clazz.getConstructor().newInstance().toString());
-        assertNotSame("Not the class of the test class path", VersionedType.class, clazz);
-        assertSame(framework.adapt(BundleWiring.class).getClassLoader(), clazz.getClassLoader());
+        assertSame(org.jboss.osgi.framework.spi.BundleManager.class.getClassLoader(), clazz.getClassLoader());
         try {
             extension.loadClass(TYPE_NAME);
             fail("ClassNotFoundException expected");

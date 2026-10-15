@@ -177,7 +177,10 @@ public final class LogServices {
     }
 
     void addLogListener(LogListener listener) {
-        listeners.add(listener);
+        // Ordered with the entries: the listener gets the entries that are logged after it was added
+        synchronized (entries) {
+            listeners.add(listener);
+        }
     }
 
     void removeLogListener(LogListener listener) {
@@ -206,11 +209,13 @@ public final class LogServices {
             // Submitted in the order of the sequence
             deliverer = executor;
             if (deliverer != null && listeners.isEmpty() == false) {
+                // The listeners that are registered when the entry is created get it, not those added before it is delivered
+                final List<LogListener> targets = new ArrayList<LogListener>(listeners);
                 try {
                     deliverer.execute(new Runnable() {
                         @Override
                         public void run() {
-                            deliver(entry);
+                            deliver(entry, targets);
                         }
                     });
                 } catch (RejectedExecutionException ex) {
@@ -220,8 +225,11 @@ public final class LogServices {
         }
     }
 
-    private void deliver(LogEntry entry) {
-        for (LogListener listener : listeners) {
+    private void deliver(LogEntry entry, List<LogListener> targets) {
+        for (LogListener listener : targets) {
+            // A listener that was removed in the meantime does not get the entry
+            if (listeners.contains(listener) == false)
+                continue;
             try {
                 listener.logged(entry);
             } catch (Throwable th) {

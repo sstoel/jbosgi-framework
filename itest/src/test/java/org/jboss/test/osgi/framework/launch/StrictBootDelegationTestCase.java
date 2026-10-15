@@ -61,8 +61,20 @@ public class StrictBootDelegationTestCase extends AbstractFrameworkLaunchTest {
 
     @Test
     public void testDefault() throws Exception {
-        // The packages of the java.base module are visible to every bundle
+        // Strict by default: only java.* packages are visible without an import (Core 3.9.3)
         startFramework(null, null);
+        try {
+            install("no-import", null).loadClass(JAVAX_TYPE);
+            fail("ClassNotFoundException expected");
+        } catch (ClassNotFoundException ex) {
+            // expected
+        }
+    }
+
+    @Test
+    public void testNonStrictBootDelegation() throws Exception {
+        // The packages of the java.base module are visible to every bundle
+        startFramework("false", null);
         assertSame(SSLContext.class, install("no-import", null).loadClass(JAVAX_TYPE));
     }
 

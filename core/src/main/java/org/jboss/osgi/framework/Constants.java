@@ -49,8 +49,9 @@ public interface Constants extends org.osgi.framework.Constants {
     String PROPERTY_AUTO_START_URLS = "org.jboss.osgi.auto.start";
 
     /**
-     * If true, a bundle only sees the packages of the Java platform that are java.* packages, configured for
-     * boot delegation or imported. By default the packages of the java.base module are always visible to a bundle.
+     * If true (the default), a bundle only sees the packages of the Java platform that are java.* packages, configured
+     * for boot delegation or imported. If false the packages of the java.base module are always visible to a bundle.
+     * The WildFly integration has its own default: false.
      */
     String PROPERTY_STRICT_BOOT_DELEGATION = "org.jboss.osgi.framework.bootdelegation.strict";
 }

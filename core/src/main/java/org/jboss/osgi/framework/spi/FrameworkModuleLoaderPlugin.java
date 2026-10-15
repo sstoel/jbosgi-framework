@@ -54,7 +54,10 @@ public class FrameworkModuleLoaderPlugin extends AbstractIntegrationService<Fram
     @Override
     protected FrameworkModuleLoader createServiceValue(StartContext startContext) {
         ServiceContainer serviceContainer = startContext.getController().getServiceContainer();
+        // Bundles only see the packages of java.base that they import or that are boot delegated (Core 3.9.3).
+        // The property set to false gives bundle modules the whole java.base module, as before R8
         Object strict = injectedBundleManager.getValue().getProperty(Constants.PROPERTY_STRICT_BOOT_DELEGATION);
-        return new FrameworkModuleLoaderImpl(serviceContainer, Boolean.parseBoolean(String.valueOf(strict)));
+        boolean strictBootDelegation = strict == null || Boolean.parseBoolean(String.valueOf(strict).trim());
+        return new FrameworkModuleLoaderImpl(serviceContainer, strictBootDelegation);
     }
 }

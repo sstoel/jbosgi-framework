@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -177,6 +178,9 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     private final FrameworkExtensions frameworkExtensions = new FrameworkExtensions(this);
     private BundleActivator connectActivator;
     private final ConnectVirtualFile.OpenContents connectContents = new ConnectVirtualFile.OpenContents();
+    // The id of this framework instance, unique in the JVM also when the framework is loaded by several class loaders,
+    // part of the host of its bundle URLs
+    private final String instanceId = Long.toHexString(new SecureRandom().nextLong() & Long.MAX_VALUE);
 
     @SuppressWarnings("deprecation")
     BundleManagerPlugin(ServiceContainer serviceContainer, FrameworkBuilder frameworkBuilder) {
@@ -340,6 +344,14 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     @Override
     public boolean isFrameworkActive() {
         return Boolean.TRUE.equals(injectedFrameworkActive.getOptionalValue());
+    }
+
+    /**
+     * The id of this framework instance in the JVM. The bundle URLs of the framework carry it in their host, the
+     * 'bundle' URL handler of the JVM routes them to their framework
+     */
+    String getInstanceId() {
+        return instanceId;
     }
 
     FrameworkState getFrameworkState() {

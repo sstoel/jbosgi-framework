@@ -25,11 +25,14 @@ import java.net.URL;
 import java.net.URLStreamHandler;
 import java.net.URLStreamHandlerFactory;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 
 import org.osgi.framework.ServiceReference;
 import org.osgi.service.url.URLStreamHandlerService;
@@ -41,9 +44,32 @@ import org.osgi.service.url.URLStreamHandlerService;
  * @author Thomas.Diesler@jboss.com
  * @since 10-Jan-2011
  */
-final class OSGiStreamHandlerFactoryDelegate implements URLStreamHandlerFactory {
+final class OSGiStreamHandlerFactoryDelegate implements URLStreamHandlerFactory, BiConsumer<String, URLStreamHandlerFactory> {
 
     private URLStreamHandlerFactory delegate;
+    // The URL handler factories of the frameworks that are loaded by other class loaders, by the prefix of their bundle
+    // URLs. Only the factory of the first class loader becomes the factory of the JVM, the others register with it
+    private final Map<String, URLStreamHandlerFactory> foreignFactories = new ConcurrentHashMap<String, URLStreamHandlerFactory>();
+
+    /**
+     * Register the factory of a framework of another class loader, or remove it when the factory is null. Called through
+     * the JDK interface, across class loaders.
+     */
+    @Override
+    public void accept(String prefix, URLStreamHandlerFactory factory) {
+        if (factory != null)
+            foreignFactories.put(prefix, factory);
+        else
+            foreignFactories.remove(prefix);
+    }
+
+    URLStreamHandlerFactory getForeignFactory(String prefix) {
+        return prefix != null ? foreignFactories.get(prefix) : null;
+    }
+
+    Collection<URLStreamHandlerFactory> getForeignFactories() {
+        return foreignFactories.values();
+    }
     private Map<String, List<ServiceReference<URLStreamHandlerService>>> streamHandlers = new HashMap<String, List<ServiceReference<URLStreamHandlerService>>>();
 
     void setDelegateFactory(URLStreamHandlerFactory factory) {
@@ -62,9 +88,11 @@ final class OSGiStreamHandlerFactoryDelegate implements URLStreamHandlerFactory 
         }
     }
 
+    /** A copy of the handler references of the protocol, the highest ranked first, or null */
     List<ServiceReference<URLStreamHandlerService>> getStreamHandlers(String protocol) {
         synchronized (streamHandlers) {
-            return streamHandlers.get(protocol);
+            List<ServiceReference<URLStreamHandlerService>> list = streamHandlers.get(protocol);
+            return list != null ? new ArrayList<ServiceReference<URLStreamHandlerService>>(list) : null;
         }
     }
 
@@ -91,6 +119,14 @@ final class OSGiStreamHandlerFactoryDelegate implements URLStreamHandlerFactory 
 
     @Override
     public URLStreamHandler createURLStreamHandler(String protocol) {
-        return delegate != null ? delegate.createURLStreamHandler(protocol) : null;
+        URLStreamHandler handler = delegate != null ? delegate.createURLStreamHandler(protocol) : null;
+        // The JVM caches the handler of a protocol: the proxy also serves the frameworks of other class loaders
+        if (handler == null) {
+            for (URLStreamHandlerFactory factory : foreignFactories.values()) {
+                if (factory.createURLStreamHandler(protocol) != null)
+                    return new URLHandlerSupportImpl.URLStreamHandlerProxy(protocol);
+            }
+        }
+        return handler;
     }
 }

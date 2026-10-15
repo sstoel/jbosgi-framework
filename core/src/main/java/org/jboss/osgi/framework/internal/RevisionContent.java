@@ -73,12 +73,31 @@ final class RevisionContent implements EntriesProvider {
             symbolicName = "anonymous";
         }
         int revisionId = brev.getRevisionId();
-        identity = symbolicName + "-" + bundleId + "-" + revisionId + "-" + contentId;
+        identity = getFrameworkPrefix(brev.getBundleManager()) + symbolicName + "-" + bundleId + "-" + revisionId + "-" + contentId;
         LOGGER.tracef("new RevisionContent: %s", identity);
+    }
+
+    /**
+     * The prefix of the URL identities of a framework instance: the bundle URLs of all frameworks in the JVM have the
+     * same protocol, the 'bundle' URL handler finds the framework of a URL by it
+     */
+    static String getFrameworkPrefix(BundleManagerPlugin bundleManager) {
+        return "fw" + bundleManager.getInstanceId() + ".";
+    }
+
+    /**
+     * The framework prefix of a bundle URL host, or null
+     */
+    static String getFrameworkPrefix(String host) {
+        int dot = host != null && host.startsWith("fw") ? host.indexOf('.') : -1;
+        return dot > 2 ? host.substring(0, dot + 1) : null;
     }
 
     static RevisionContent findRevisionContent(BundleManagerPlugin bundleManager, String identity) {
         assert identity != null : "Null identity";
+        // A URL of another framework instance in the JVM
+        if (identity.startsWith("fw") && !identity.startsWith(getFrameworkPrefix(bundleManager)))
+            return null;
         String[] parts = identity.split("-");
         assert parts.length == 4 : "Invalid identity: " + identity;
         long bundleId = Long.parseLong(parts[1]);

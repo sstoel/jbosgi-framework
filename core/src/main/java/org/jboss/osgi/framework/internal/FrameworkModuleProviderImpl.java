@@ -21,9 +21,14 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
+import java.io.File;
 import java.io.IOException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -175,20 +180,56 @@ public class FrameworkModuleProviderImpl implements FrameworkModuleProvider {
         }
     }
 
+    /**
+     * Append the content of an extension to the class path of the class loader of the framework. The content is then
+     * loaded by that class loader, as if it was on the class path of the framework (Core 3.15).
+     *
+     * A URLClassLoader gets the URL, the application class loader of the JVM the path, the way an instrumentation agent
+     * appends to it. Both methods are not accessible: like the reference implementation the framework uses the trusted
+     * method handle lookup of the JVM, java.base need not be opened.
+     */
     private boolean appendToFrameworkClassPath(URL contentURL) {
         ClassLoader classLoader = BundleManagerPlugin.class.getClassLoader();
-        if (classLoader instanceof URLClassLoader == false)
-            return false;
         try {
-            // Only possible when java.net is open to the framework, i.e. --add-opens java.base/java.net=ALL-UNNAMED
-            Method method = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
-            method.setAccessible(true);
-            method.invoke(classLoader, contentURL);
+            if (classLoader instanceof URLClassLoader) {
+                try {
+                    Method method = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
+                    method.setAccessible(true);
+                    method.invoke(classLoader, contentURL);
+                    return true;
+                } catch (RuntimeException ex) {
+                    // java.net is not open to the framework
+                    MethodHandle handle = TrustedLookup.get().findVirtual(URLClassLoader.class, "addURL", MethodType.methodType(void.class, URL.class));
+                    handle.invoke(classLoader, contentURL);
+                    return true;
+                }
+            }
+            if (classLoader == null || !"file".equals(contentURL.getProtocol()))
+                return false;
+            String path = new File(contentURL.toURI()).getPath();
+            MethodHandle handle = findAppendToClassPath(TrustedLookup.get(), classLoader.getClass());
+            if (handle == null)
+                return false;
+            handle.invoke(classLoader, path);
             return true;
-        } catch (Exception ex) {
+        } catch (Throwable th) {
+            LOGGER.debugf(th, "Cannot append to the class path of the framework: %s", contentURL);
             return false;
         }
     }
+
+    // The method of the application class loader that instrumentation agents use, in the class or a super class
+    private static MethodHandle findAppendToClassPath(MethodHandles.Lookup lookup, Class<?> loaderClass) {
+        for (Class<?> aux = loaderClass; aux != null && aux != ClassLoader.class; aux = aux.getSuperclass()) {
+            try {
+                return lookup.findVirtual(aux, "appendToClassPathForInstrumentation", MethodType.methodType(void.class, String.class));
+            } catch (NoSuchMethodException | IllegalAccessException ex) {
+                // try the super class
+            }
+        }
+        return null;
+    }
+
 
     private static final class FrameworkClassLoaderLoader implements LocalLoader {
 

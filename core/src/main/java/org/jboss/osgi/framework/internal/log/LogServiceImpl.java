@@ -76,8 +76,9 @@ final class LogServiceImpl implements LogService {
     }
 
     private <L extends Logger> L getLoggerInternal(Bundle loggerBundle, String name, Class<L> loggerType) {
+        // A logging call must not break the caller: a null name is the name of the LogService logger of the bundle
         if (name == null)
-            throw new IllegalArgumentException("Null logger name");
+            name = "LogService." + loggerBundle.getSymbolicName();
         boolean formatter = FormatterLogger.class.equals(loggerType);
         if (formatter == false && Logger.class.equals(loggerType) == false)
             throw new IllegalArgumentException("Unsupported logger type: " + loggerType);

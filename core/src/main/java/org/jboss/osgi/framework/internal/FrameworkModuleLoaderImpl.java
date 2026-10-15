@@ -127,7 +127,7 @@ public final class FrameworkModuleLoaderImpl extends ModuleLoader implements Fra
                 module = moduleHolder.getModule();
                 if (module == null) {
                     module = loadModuleLocal(identifier);
-                    if (strictBootDelegation)
+                    if (strictBootDelegation && moduleHolder.bundleModule)
                         removeBaseDependency(module);
                     moduleHolder.setModule(module);
                 }
@@ -155,6 +155,8 @@ public final class FrameworkModuleLoaderImpl extends ModuleLoader implements Fra
             if (moduleSpecs.get(identifier) != null)
                 throw MESSAGES.illegalStateModuleAlreadyExists(identifier);
             ModuleHolder moduleHolder = new ModuleHolder(moduleSpec);
+            // Strict boot delegation applies to the modules of OSGi bundles, not to the modules that are adapted as bundles
+            moduleHolder.bundleModule = brev instanceof UserBundleRevision;
             moduleSpecs.put(identifier, moduleHolder);
         }
     }
@@ -265,6 +267,7 @@ public final class FrameworkModuleLoaderImpl extends ModuleLoader implements Fra
 
         private ModuleSpec moduleSpec;
         private Module module;
+        private boolean bundleModule;
 
         ModuleHolder(ModuleSpec moduleSpec) {
             assert moduleSpec != null : "Null moduleSpec";
