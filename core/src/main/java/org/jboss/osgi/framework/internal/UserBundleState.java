@@ -62,6 +62,7 @@ import org.jboss.osgi.metadata.OSGiMetaData;
 import org.jboss.osgi.metadata.OSGiMetaDataBuilder;
 import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
+import org.jboss.osgi.resolver.XRequirement;
 import org.jboss.osgi.resolver.XWiringSupport;
 import org.jboss.osgi.resolver.spi.AbstractBundleWiring;
 import org.jboss.osgi.resolver.spi.ResolverHookException;
@@ -76,11 +77,13 @@ import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.Version;
 import org.osgi.framework.hooks.bundle.CollisionHook;
 import org.osgi.framework.namespace.ExecutionEnvironmentNamespace;
+import org.osgi.framework.namespace.NativeNamespace;
 import org.osgi.framework.startlevel.BundleStartLevel;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleRevisions;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.resource.Capability;
+import org.osgi.resource.Requirement;
 import org.osgi.resource.Wire;
 
 /**
@@ -421,6 +424,22 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         }
     }
 
+    // The mandatory osgi.native requirement of the bundle is not satisfied by the system bundle
+    private boolean isNativeCodeUnsatisfied() {
+        List<Requirement> reqs = getBundleRevision().getRequirements(NativeNamespace.NATIVE_NAMESPACE);
+        if (reqs.isEmpty())
+            return false;
+        XRequirement req = (XRequirement) reqs.get(0);
+        if (req.isOptional())
+            return false;
+        XBundleRevision sysrev = getFrameworkState().getSystemBundle().getBundleRevision();
+        for (Capability cap : sysrev.getCapabilities(NativeNamespace.NATIVE_NAMESPACE)) {
+            if (req.matches(cap))
+                return false;
+        }
+        return true;
+    }
+
     private VirtualFile getContentAtLocation() {
         URL locationURL;
         try {
@@ -689,6 +708,9 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         if (ensureResolved(true) == false) {
             Exception resex = getLastResolverException();
             int type = (resex instanceof ResolverHookException ? BundleException.REJECTED_BY_HOOK : BundleException.RESOLVE_ERROR);
+            // No Bundle-NativeCode clause matches the environment (3.10.2)
+            if (type == BundleException.RESOLVE_ERROR && isNativeCodeUnsatisfied())
+                type = BundleException.NATIVECODE_ERROR;
             throw new BundleException(MESSAGES.cannotResolveBundle(this), type, resex);
         }
 

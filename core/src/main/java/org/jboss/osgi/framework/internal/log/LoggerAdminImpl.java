@@ -42,7 +42,8 @@ final class LoggerAdminImpl implements LoggerAdmin {
         LogLevel level = LogLevel.WARN;
         if (defaultLevel != null) {
             try {
-                level = LogLevel.valueOf(defaultLevel.trim().toUpperCase());
+                // Only the name of a LogLevel, any other value gives the default (101.8.2)
+                level = LogLevel.valueOf(defaultLevel);
             } catch (IllegalArgumentException ex) {
                 // the default applies
             }
