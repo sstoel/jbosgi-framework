@@ -379,7 +379,8 @@ final class FallbackLoader implements LocalLoader {
 
     private void findInResolvedRevisions(DynamicLoadContext context, List<XPackageRequirement> matchingPatterns) {
         LOGGER.tracef("Attempt to find path dynamically in resolved modules ...");
-        Set<XBundle> resolved = bundleManager.getBundles(Bundle.RESOLVED | Bundle.ACTIVE);
+        // STARTING and STOPPING are resolved too, a lazy bundle waits in STARTING for the class load that activates it
+        Set<XBundle> resolved = bundleManager.getBundles(Bundle.RESOLVED | Bundle.STARTING | Bundle.ACTIVE | Bundle.STOPPING);
         LOGGER.tracef("Resolved modules: %d", resolved.size());
         if (LOGGER.isTraceEnabled()) {
             for (Bundle bundle : resolved)
