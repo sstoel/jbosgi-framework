@@ -364,7 +364,18 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         return injectedFramework.getOptionalValue();
     }
 
-    static Version getFrameworkVersion() {
+    /**
+     * The state of a running framework: the lifecycle operations on a bundle of a stopped framework, whose services are
+     * gone, fail with an IllegalStateException
+     */
+    private FrameworkState activeFrameworkState() {
+        FrameworkState state = getFrameworkState();
+        if (state == null)
+            throw MESSAGES.illegalStateFrameworkAlreadyStopped();
+        return state;
+    }
+
+        static Version getFrameworkVersion() {
         Version version;
         String versionSpec = BundleManagerPlugin.class.getPackage().getImplementationVersion();
         // Without the Implementation-Version, e.g. in a jar that combines several jars, the Maven properties of the jar
@@ -406,6 +417,9 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     void setManagerState(int state) {
         managerState.set(state);
+        synchronized (managerState) {
+            managerState.notifyAll();
+        }
     }
 
     /**
@@ -711,7 +725,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     @Override
     public void resolveBundle(XBundle bundle) throws ResolutionException {
-        LockManager lockManager = getFrameworkState().getLockManager();
+        LockManager lockManager = activeFrameworkState().getLockManager();
         LockableItem[] items = getLockableItems(lockManager, Method.RESOLVE, bundle);
         LockContext lockContext = lockManager.lockItems(Method.RESOLVE, items);
         try {
@@ -761,7 +775,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     @Override
     public void startBundle(XBundle bundle, int options) throws BundleException {
-        LockManager lockManager = getFrameworkState().getLockManager();
+        LockManager lockManager = activeFrameworkState().getLockManager();
         LockableItem[] items = getLockableItems(lockManager, Method.START, bundle);
         LockContext lockContext = lockForStateChange(lockManager, Method.START, items);
         boolean started = false;
@@ -787,7 +801,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     @Override
     public void stopBundle(XBundle bundle, int options) throws BundleException {
-        LockManager lockManager = getFrameworkState().getLockManager();
+        LockManager lockManager = activeFrameworkState().getLockManager();
 
         LockableItem[] items = getLockableItems(lockManager, Method.STOP, bundle);
         LockContext lockContext = lockForStateChange(lockManager, Method.STOP, items);
@@ -803,7 +817,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     @Override
     public void updateBundle(XBundle bundle, InputStream input) throws BundleException {
-        LockManager lockManager = getFrameworkState().getLockManager();
+        LockManager lockManager = activeFrameworkState().getLockManager();
         LockableItem[] items = getLockableItems(lockManager, Method.UPDATE, bundle);
         LockContext lockContext = lockForStateChange(lockManager, Method.UPDATE, items);
         int restartOptions;
@@ -845,7 +859,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     @Override
     public void uninstallBundle(XBundle bundle, int options) throws BundleException {
-        LockManager lockManager = getFrameworkState().getLockManager();
+        LockManager lockManager = activeFrameworkState().getLockManager();
 
         LockableItem[] items = getLockableItems(lockManager, Method.UNINSTALL, bundle);
         LockContext lockContext = lockForStateChange(lockManager, Method.UNINSTALL, items);
@@ -923,7 +937,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     }
 
     private BundleLifecycle getBundleLifecycle() {
-        return getFrameworkState().getCoreServices().getBundleLifecycle();
+        return activeFrameworkState().getCoreServices().getBundleLifecycle();
     }
 
     void checkUniqunessPolicy(Bundle targetBundle, String symbolicName, Version version, int policy) throws BundleException {
@@ -1198,9 +1212,45 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (framework == null)
             cachedSystemBundle = getSystemBundle();
         shutdownContainer.shutdown();
+        // The container shutdown unregisters the services of the framework (step 3 of Framework.stop): the framework is
+        // RESOLVED (step 5) once it completed. A framework that runs in the container of a server does not wait for it
+        shutdownContainer.awaitShutdown(30, TimeUnit.SECONDS);
         if (frameworkBuilder instanceof FrameworkBuilderImpl)
             ((FrameworkBuilderImpl) frameworkBuilder).releaseIntegrationServices();
         setManagerState(Bundle.RESOLVED);
+    }
+
+    /**
+     * Release what a failed init created: the executors and, when the framework created it, the service container with its
+     * threads. Otherwise the threads of a framework that never started keep the JVM alive.
+     */
+    void releaseAfterFailedInit() {
+        synchronized (executorServices) {
+            for (ExecutorService service : executorServices)
+                service.shutdown();
+        }
+        if (cachedSystemBundle == null)
+            cachedSystemBundle = getSystemBundle();
+        shutdownContainer.shutdown();
+        if (frameworkBuilder instanceof FrameworkBuilderImpl)
+            ((FrameworkBuilderImpl) frameworkBuilder).releaseIntegrationServices();
+    }
+
+    /**
+     * True if the shutdown of the service container was initiated and has not completed
+     */
+    boolean isShutdownInProgress() {
+        return shutdownContainer.isShutdownInitiated() && shutdownContainer.isShutdownComplete() == false;
+    }
+
+    /**
+     * The event of a framework that is not stopping: why it stopped last, STOPPED if it never ran
+     */
+    FrameworkEvent getStoppedEvent(Bundle defaultSource) {
+        SystemBundleState systemBundle = getSystemBundle();
+        Bundle eventSource = systemBundle != null ? systemBundle : framework != null ? framework : cachedSystemBundle != null ? cachedSystemBundle : defaultSource;
+        int eventType = shutdownContainer.isShutdownComplete() ? stoppedEvent : FrameworkEvent.STOPPED;
+        return new FrameworkEvent(eventType, eventSource, null);
     }
 
     /**
@@ -1208,6 +1258,17 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
      * reload: the bundles are stopped like on a shutdown of the framework (start level 0), their persistent state is
      * kept. The executors end with the services that own them.
      */
+    /**
+     * True if the framework is on its way to start level 0: it stops through the system bundle, or the server stops its
+     * services. No bundle is activated any more.
+     */
+    boolean isFrameworkStopping() {
+        if (getManagerState() == Bundle.STOPPING)
+            return true;
+        SystemBundleState systemBundle = getSystemBundle();
+        return systemBundle != null && systemBundle.getState() == Bundle.STOPPING;
+    }
+
     void stopFrameworkServices() {
         // A framework that is stopping or stopped through the system bundle has stopped its bundles
         int state = getManagerState();
@@ -1253,6 +1314,18 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (interrupted)
             Thread.currentThread().interrupt();
 
+        // A bundle that became active while its start level was passed, e.g. started by another thread, is stopped too:
+        // after the stop no bundle is active (4.4.2)
+        for (XBundle bundle : getBundles(Bundle.STARTING | Bundle.ACTIVE)) {
+            if (bundle.getBundleId() == 0 || bundle.isFragment())
+                continue;
+            try {
+                bundle.stop(Bundle.STOP_TRANSIENT);
+            } catch (Exception ex) {
+                getFrameworkState().getFrameworkEvents().fireFrameworkEvent(bundle, FrameworkEvent.ERROR, ex);
+            }
+        }
+
         // Stop the extension bundle activators before event handling is disabled
         frameworkExtensions.stopActivators();
         stopConnectActivator();
@@ -1268,13 +1341,34 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
      * A Framework Event is returned to indicate why this Framework has stopped.
      */
     FrameworkEvent waitForStop(long timeout) throws InterruptedException {
+        return waitForStop(timeout, null);
+    }
+
+    /**
+     * Wait until the framework stopped, the event has the given source when there is no other
+     */
+    FrameworkEvent waitForStop(long timeout, Bundle defaultSource) throws InterruptedException {
         SystemBundleState systemBundle = getSystemBundle();
-        Bundle eventSource = systemBundle != null ? systemBundle : framework != null ? framework : cachedSystemBundle;
+        Bundle eventSource = systemBundle != null ? systemBundle : framework != null ? framework : cachedSystemBundle != null ? cachedSystemBundle : defaultSource;
 
         FrameworkEvent frameworkEvent = null;
+        long deadline = timeout == 0 ? Long.MAX_VALUE : System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
         shutdownContainer.awaitTermination(timeout, TimeUnit.MILLISECONDS);
+        // The stopping thread makes the framework RESOLVED after the container terminated: the stop has completed
+        // when the framework left STOPPING
+        if (shutdownContainer.isShutdownComplete()) {
+            synchronized (managerState) {
+                while (getManagerState() == Bundle.STOPPING) {
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0)
+                        break;
+                    TimeUnit.NANOSECONDS.timedWait(managerState, remaining);
+                }
+            }
+        }
         if (eventSource != null) {
-            int eventType = shutdownContainer.isShutdownComplete() ? stoppedEvent : FrameworkEvent.WAIT_TIMEDOUT;
+            boolean stopped = shutdownContainer.isShutdownComplete() && getManagerState() != Bundle.STOPPING;
+            int eventType = stopped ? stoppedEvent : FrameworkEvent.WAIT_TIMEDOUT;
             frameworkEvent = new FrameworkEvent(eventType, eventSource, null);
         }
         return frameworkEvent;
@@ -1418,19 +1512,35 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             }
         }
 
+        // The terminate listener of the container also waits for a shutdown that has not been initiated yet, the timeout
+        // is the only bound
         void awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
             LOGGER.debugf("awaitTermination: %dms", unit.toMillis(timeout));
-            synchronized (shutdownInitiated) {
-                if (shutdownInitiated.get() == false) {
-                    LOGGER.debugf("shutdownInitiated.wait");
-                    shutdownInitiated.wait(2000);
-                }
-            }
             serviceContainer.awaitTermination(timeout == 0 ? Long.MAX_VALUE : timeout, unit);
         }
 
         boolean isShutdownComplete() {
             return serviceContainer.isShutdownComplete();
+        }
+
+        // Wait for the shutdown of a container that the framework shut down, bounded; the interrupt status is kept
+        void awaitShutdown(long timeout, TimeUnit unit) {
+            if (allowContainerShutdown == false || shutdownInitiated.get() == false)
+                return;
+            boolean interrupted = false;
+            long deadline = System.nanoTime() + unit.toNanos(timeout);
+            while (serviceContainer.isShutdownComplete() == false) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0)
+                    break;
+                try {
+                    serviceContainer.awaitTermination(remaining, TimeUnit.NANOSECONDS);
+                } catch (InterruptedException ex) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted)
+                Thread.currentThread().interrupt();
         }
     }
 }

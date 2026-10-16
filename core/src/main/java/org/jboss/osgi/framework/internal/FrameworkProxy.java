@@ -205,13 +205,18 @@ final class FrameworkProxy implements Framework {
             }
 
         } catch (BundleException ex) {
-            if (bundleManager != null)
+            // A failed init releases what it created, its threads would keep the JVM alive
+            if (bundleManager != null) {
                 bundleManager.setManagerState(Bundle.INSTALLED);
+                bundleManager.releaseAfterFailedInit();
+            }
             throw ex;
         } catch (Throwable ex) {
             // The bundle manager is not available when the framework services cannot be created
-            if (bundleManager != null)
+            if (bundleManager != null) {
                 bundleManager.setManagerState(Bundle.INSTALLED);
+                bundleManager.releaseAfterFailedInit();
+            }
             if (ex instanceof InterruptedException)
                 Thread.currentThread().interrupt();
             throw MESSAGES.cannotInitializeFramework(ex);
@@ -327,7 +332,13 @@ final class FrameworkProxy implements Framework {
      */
     @Override
     public FrameworkEvent waitForStop(long timeout) throws InterruptedException {
-        return bundleManager != null ? bundleManager.waitForStop(timeout) : new FrameworkEvent(FrameworkEvent.STOPPED, this, null);
+        if (bundleManager == null)
+            return new FrameworkEvent(FrameworkEvent.STOPPED, this, null);
+        // Only a framework that is STARTING, ACTIVE or STOPPING, or whose shutdown is still completing, is waited for
+        int state = getState();
+        if (state != Bundle.STARTING && state != Bundle.ACTIVE && state != Bundle.STOPPING && bundleManager.isShutdownInProgress() == false)
+            return bundleManager.getStoppedEvent(this);
+        return bundleManager.waitForStop(timeout, this);
     }
 
     @Override

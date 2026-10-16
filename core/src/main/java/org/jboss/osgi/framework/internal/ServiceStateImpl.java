@@ -190,19 +190,22 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         // Get the ServiceFactory value
         S result = null;
         try {
-            // The factory is called for one bundle at a time, the holder of a bundle is only removed under the same lock
-            synchronized (bundle) {
-                ServiceFactoryHolder<S> factoryHolder = getFactoryHolder(bundle);
-                if (factoryHolder == null) {
-                    ServiceFactory factory = (ServiceFactory) valueProvider.getValue();
-                    factoryHolder = new ServiceFactoryHolder<S>(bundle, factory);
-                    factoryValues.put(bundle.getBundleId(), factoryHolder);
+            // The factory is called for one bundle at a time. The lock is the holder of this service for the bundle, not
+            // the bundle: the factory of another service that this factory gets, also for another bundle, does not wait
+            // for it (shutdown/18). A holder is removed under its own lock, a removed holder is replaced
+            while (true) {
+                ServiceFactoryHolder<S> factoryHolder = factoryValues.computeIfAbsent(bundle.getBundleId(),
+                        id -> new ServiceFactoryHolder<S>(bundle, (ServiceFactory) valueProvider.getValue()));
+                synchronized (factoryHolder) {
+                    if (factoryHolder.removed)
+                        continue;
+                    try {
+                        result = factoryHolder.getService();
+                    } finally {
+                        removeUnusedFactoryHolder(factoryHolder);
+                    }
                 }
-                try {
-                    result = factoryHolder.getService();
-                } finally {
-                    removeUnusedFactoryHolder(factoryHolder);
-                }
+                break;
             }
 
             // If the service object returned by the ServiceFactory object is not an instanceof all the classes named
@@ -223,9 +226,11 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     @Override
     public void ungetScopedValue(XBundle bundle) {
         if (valueProvider.isFactoryValue()) {
-            synchronized (bundle) {
-                ServiceFactoryHolder<S> factoryHolder = getFactoryHolder(bundle);
-                if (factoryHolder != null) {
+            ServiceFactoryHolder<S> factoryHolder = getFactoryHolder(bundle);
+            if (factoryHolder != null) {
+                synchronized (factoryHolder) {
+                    if (factoryHolder.removed)
+                        return;
                     try {
                         factoryHolder.ungetService();
                     } catch (RuntimeException rte) {
@@ -239,10 +244,13 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         }
     }
 
-    // A holder keeps its bundle, it is removed when the bundle does not use the service any more
+    // A holder keeps its bundle, it is removed when the bundle does not use the service any more. Called under the lock of
+    // the holder
     private void removeUnusedFactoryHolder(ServiceFactoryHolder<S> factoryHolder) {
-        if (factoryHolder.useCount.get() == 0)
+        if (factoryHolder.useCount.get() == 0) {
+            factoryHolder.removed = true;
             factoryValues.remove(factoryHolder.bundle.getBundleId(), factoryHolder);
+        }
     }
 
     private String getServiceScope() {
@@ -787,6 +795,8 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         XBundle bundle;
         AtomicInteger useCount;
         T value;
+        // Removed from the holders of the service, under the lock of this holder
+        boolean removed;
 
         ServiceFactoryHolder(XBundle bundle, ServiceFactory factory) {
             this.bundle = bundle;
@@ -797,20 +807,19 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         @SuppressWarnings("unchecked")
         T getService() {
             // Multiple calls to getService() return the same value
+            // The Framework must not allow this method to be concurrently called for the same bundle: the caller holds
+            // the lock of this holder
             if (useCount.get() == 0) {
-                // The Framework must not allow this method to be concurrently called for the same bundle
-                synchronized (bundle) {
-                    T retValue = (T) factory.getService(bundle, factoryRegistration);
-                    if (retValue == null)
-                        return null;
+                T retValue = (T) factory.getService(bundle, factoryRegistration);
+                if (retValue == null)
+                    return null;
 
-                    // The Framework will check if the returned service object is an instance of all the
-                    // classes named when the service was registered. If not, then null is returned to the bundle.
-                    if (checkValidClassNames(ownerBundle, (String[]) getProperty(Constants.OBJECTCLASS), retValue) == false)
-                        return null;
+                // The Framework will check if the returned service object is an instance of all the
+                // classes named when the service was registered. If not, then null is returned to the bundle.
+                if (checkValidClassNames(ownerBundle, (String[]) getProperty(Constants.OBJECTCLASS), retValue) == false)
+                    return null;
 
-                    value = retValue;
-                }
+                value = retValue;
             }
 
             useCount.incrementAndGet();
@@ -824,10 +833,8 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
 
             // Call unget on the factory when done
             if (useCount.decrementAndGet() == 0) {
-                synchronized (bundle) {
-                    factory.ungetService(bundle, factoryRegistration, value);
-                    value = null;
-                }
+                factory.ungetService(bundle, factoryRegistration, value);
+                value = null;
             }
         }
     }

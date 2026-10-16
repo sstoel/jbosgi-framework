@@ -951,6 +951,10 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     }
 
     private boolean startLevelValidForStart() {
+        // A stopping framework is on its way to start level 0: the autostart setting is recorded, the bundle is not
+        // activated
+        if (getBundleManager().isFrameworkStopping())
+            return false;
         StartLevelManager startLevelPlugin = getFrameworkState().getStartLevelManager();
         return startLevelPlugin.getBundleStartLevel(this) <= startLevelPlugin.getFrameworkStartLevel();
     }

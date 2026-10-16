@@ -145,10 +145,16 @@ public final class StartLevelManagerImpl implements StartLevelManager {
             Collections.sort(bundles, comparator);
 
             while (startLevel.get() < level) {
+                // The stop of the framework is final: a pending or concurrent increase is discarded
+                if (bundleManager.isFrameworkStopping()) {
+                    LOGGER.debugf("Framework stopping, start level increase to %d discarded", level);
+                    break;
+                }
                 startLevel.incrementAndGet();
                 LOGGER.infoStartingBundlesForStartLevel(startLevel.get());
                 for (XBundle bundle : bundles) {
-                    if (bundle.getBundleId() == 0 || bundle.isFragment())
+                    // A bundle of the snapshot may have been uninstalled meanwhile, e.g. by the activator of another one
+                    if (bundle.getBundleId() == 0 || bundle.isFragment() || bundle.getState() == Bundle.UNINSTALLED)
                         continue;
 
                     BundleStartLevelState state = getBundleStartLevelState(bundle);
@@ -195,7 +201,8 @@ public final class StartLevelManagerImpl implements StartLevelManager {
                 Collections.reverse(bundles);
 
                 for (XBundle bundle : bundles) {
-                    if (bundle.getBundleId() == 0 || bundle.isFragment())
+                    // A bundle of the snapshot may have been uninstalled meanwhile, e.g. by the activator of another one
+                    if (bundle.getBundleId() == 0 || bundle.isFragment() || bundle.getState() == Bundle.UNINSTALLED)
                         continue;
 
                     BundleStartLevelState state = getBundleStartLevelState(bundle);
