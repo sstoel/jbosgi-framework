@@ -96,7 +96,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
     private final AtomicBoolean alreadyStarting = new AtomicBoolean();
     private final AtomicBoolean awaitLazyActivation = new AtomicBoolean();
-    // A class was loaded from the bundle before it was started with its lazy activation policy
+    // A class was loaded from the bundle while it waited for its start level to be activated lazily
     private final AtomicBoolean classLoadedBeforeLazyStart = new AtomicBoolean();
     private final AtomicInteger revisionIndex = new AtomicInteger();
     private final List<UserBundleRevision> revisions = new ArrayList<UserBundleRevision>();
@@ -165,9 +165,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return awaitLazyActivation.get();
     }
 
-    // A class that would trigger the lazy activation is loaded while the bundle does not await its activation
+    /**
+     * A class that would trigger the lazy activation is loaded while the bundle is persistently started with its declared
+     * activation policy but waits for its start level: the bundle is activated right away when the start level is met.
+     */
     void lazyClassLoaded() {
-        if (awaitLazyActivation.get() == false && isActivationLazy())
+        if (awaitLazyActivation.get() == false && getState() == RESOLVED && isActivationLazy() && isPersistentlyStarted() && isActivationPolicyUsed())
             classLoadedBeforeLazyStart.set(true);
     }
 
@@ -720,7 +723,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
         // #5 If the START_ACTIVATION_POLICY option is set and this bundle's declared activation policy is lazy
         boolean useActivationPolicy = (options & START_ACTIVATION_POLICY) != 0;
-        // A bundle from which a class was loaded already is activated right away, the class load cannot trigger it any more
+        // A bundle from which a class was loaded while it waited for its start level is activated right away
         if (isActivationLazy() && useActivationPolicy && classLoadedBeforeLazyStart.getAndSet(false) == false) {
 
             // #5.1 If this bundle's state is STARTING then this method returns immediately.
@@ -831,6 +834,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         if ((options & Bundle.STOP_TRANSIENT) == 0) {
             setPersistentlyStarted(false);
             setBundleActivationPolicyUsed(false);
+            classLoadedBeforeLazyStart.set(false);
         }
 
         // #4 If this bundle's state is not STARTING or ACTIVE then this method returns immediately

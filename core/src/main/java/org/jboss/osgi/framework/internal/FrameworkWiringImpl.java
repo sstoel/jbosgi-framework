@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
 import java.util.regex.Pattern;
+import org.jboss.osgi.framework.spi.BundleLifecycle.BundleRefreshPolicy;
 import org.jboss.osgi.framework.spi.BundleManager;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.FrameworkWiringLock;
@@ -200,13 +201,16 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         List<XBundle> stopList = new ArrayList<XBundle>();
         List<XBundle> uninstallBundles = new ArrayList<XBundle>();
 
-        // The bundles of the dependency closure are locked for the whole refresh. The framework wiring lock is only held
-        // while the bundles are stopped and started: the refresh policy of an integration may undeploy and deploy a
-        // bundle with operations of its server, which must not wait for that lock (another operation of the server
-        // may hold the server's lock and wait for the framework wiring lock)
+        // The bundles of the dependency closure are locked for the whole refresh, together with the framework wiring
+        // lock: never one after the other, a lifecycle operation that holds the wiring lock may wait for a bundle of the
+        // closure. A refresh policy that refreshes the revisions with operations of a server gets the bundles without
+        // the wiring lock: another operation of the server may hold the server's lock and wait for the wiring lock. The
+        // revisions that it refreshes are no providers for other bundles meanwhile
+        BundleRefreshPolicy refreshPolicy = bundleManager.getFrameworkState().getCoreServices().getBundleLifecycle().getBundleRefreshPolicy();
         LockableItem wireLock = lockManager.getItemForType(FrameworkWiringLock.class);
         XBundle[] bundles = dependencyClosure.toArray(new XBundle[dependencyClosure.size()]);
-        LockContext context = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, null));
+        LockContext wiringContext = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, new LockableItem[] { wireLock }));
+        LockContext bundlesContext = null;
         try {
             // The states are taken under the locks: a bundle that was started while the refresh waited is stopped too
             for (Bundle auxBundle : dependencyClosure) {
@@ -222,79 +226,94 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             BundleStartLevelComparator startLevelComparator = new BundleStartLevelComparator();
             Collections.sort(stopList, startLevelComparator);
 
-            LockContext wiringContext = lockManager.lockItems(Method.REFRESH, wireLock);
-            try {
-                for (ListIterator<XBundle> it = stopList.listIterator(stopList.size()); it.hasPrevious();) {
-                    XBundle bundle = it.previous();
-                    try {
-                        bundleManager.stopBundleLifecycle(bundle, Bundle.STOP_TRANSIENT);
-                    } catch (Exception th) {
-                        events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
-                    }
-                }
-            } finally {
-                lockManager.unlockItems(wiringContext);
-            }
-
-            List<UserBundleState> removeBundles = new ArrayList<UserBundleState>();
-            for (XBundle bundle : uninstallBundles) {
-                if (bundle instanceof UserBundleState) {
-                    // Removed when the bundles that depend on it are refreshed
-                    removeBundles.add((UserBundleState) bundle);
-                } else {
-                    XBundleRevision current = bundle.getBundleRevision();
-                    BundleRevisions brevs = bundle.adapt(BundleRevisions.class);
-                    for (BundleRevision aux : brevs.getRevisions()) {
-                        XBundleRevision brev = (XBundleRevision) aux;
-                        if (brev != current) {
-                            bundleManager.removeRevisionLifecycle(brev, 0);
-                        }
-                    }
-                    // The removal pending revision of a module bundle whose module went away
-                    if (current.getWiringSupport().isEffective() == false) {
-                        bundleManager.removeRevision(current, 0);
-                    }
-                }
-                dependencyClosure.remove(bundle);
-            }
-
-            for (XBundle bundle : dependencyClosure) {
-                if (bundle instanceof UserBundleState) {
-                    try {
-                        UserBundleState userBundle = (UserBundleState) bundle;
-                        userBundle.refresh();
-                    } catch (Exception th) {
-                        events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
-                    }
-                } else {
-                    // nothing to do for adapted modules
-                }
-            }
-
-            // No bundle uses the uninstalled bundles any more, their revisions are removed (7.5.1)
-            for (UserBundleState userBundle : removeBundles) {
+            for (ListIterator<XBundle> it = stopList.listIterator(stopList.size()); it.hasPrevious();) {
+                XBundle bundle = it.previous();
                 try {
-                    bundleManager.unresolveBundle(userBundle);
-                    bundleManager.removeBundle(userBundle, InternalConstants.UNINSTALL_INTERNAL);
+                    bundleManager.stopBundleLifecycle(bundle, Bundle.STOP_TRANSIENT);
                 } catch (Exception th) {
-                    events.fireFrameworkEvent(userBundle, FrameworkEvent.ERROR, th);
+                    events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
                 }
             }
 
-            wiringContext = lockManager.lockItems(Method.REFRESH, wireLock);
+            List<XBundle> refreshBundles = new ArrayList<XBundle>(dependencyClosure);
+            bundleManager.beginRefresh(refreshBundles);
             try {
-                for (XBundle bundle : stopList) {
-                    try {
-                        bundleManager.startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
-                    } catch (Exception th) {
-                        events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
-                    }
+                if (refreshPolicy.isWiringLockAllowed() == false) {
+                    // The bundles stay locked, the lock items are reentrant
+                    bundlesContext = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, null));
+                    lockManager.unlockItems(wiringContext);
+                    wiringContext = null;
                 }
+                refreshBundlesInClosure(dependencyClosure, uninstallBundles);
             } finally {
-                lockManager.unlockItems(wiringContext);
+                bundleManager.endRefresh(refreshBundles);
+            }
+
+            if (wiringContext == null) {
+                lockManager.unlockItems(bundlesContext);
+                bundlesContext = null;
+                wiringContext = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, new LockableItem[] { wireLock }));
+            }
+            for (XBundle bundle : stopList) {
+                try {
+                    bundleManager.startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
+                } catch (Exception th) {
+                    events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
+                }
             }
         } finally {
-            lockManager.unlockItems(context);
+            if (bundlesContext != null)
+                lockManager.unlockItems(bundlesContext);
+            if (wiringContext != null)
+                lockManager.unlockItems(wiringContext);
+        }
+    }
+
+    // Refresh the bundles of the dependency closure, the stopped ones are started again by the caller
+    private void refreshBundlesInClosure(List<XBundle> dependencyClosure, List<XBundle> uninstallBundles) {
+        List<UserBundleState> removeBundles = new ArrayList<UserBundleState>();
+        for (XBundle bundle : uninstallBundles) {
+            if (bundle instanceof UserBundleState) {
+                // Removed when the bundles that depend on it are refreshed
+                removeBundles.add((UserBundleState) bundle);
+            } else {
+                XBundleRevision current = bundle.getBundleRevision();
+                BundleRevisions brevs = bundle.adapt(BundleRevisions.class);
+                for (BundleRevision aux : brevs.getRevisions()) {
+                    XBundleRevision brev = (XBundleRevision) aux;
+                    if (brev != current) {
+                        bundleManager.removeRevisionLifecycle(brev, 0);
+                    }
+                }
+                // The removal pending revision of a module bundle whose module went away
+                if (current.getWiringSupport().isEffective() == false) {
+                    bundleManager.removeRevision(current, 0);
+                }
+            }
+            dependencyClosure.remove(bundle);
+        }
+
+        for (XBundle bundle : dependencyClosure) {
+            if (bundle instanceof UserBundleState) {
+                try {
+                    UserBundleState userBundle = (UserBundleState) bundle;
+                    userBundle.refresh();
+                } catch (Exception th) {
+                    events.fireFrameworkEvent(bundle, FrameworkEvent.ERROR, th);
+                }
+            } else {
+                // nothing to do for adapted modules
+            }
+        }
+
+        // No bundle uses the uninstalled bundles any more, their revisions are removed (7.5.1)
+        for (UserBundleState userBundle : removeBundles) {
+            try {
+                bundleManager.unresolveBundle(userBundle);
+                bundleManager.removeBundle(userBundle, InternalConstants.UNINSTALL_INTERNAL);
+            } catch (Exception th) {
+                events.fireFrameworkEvent(userBundle, FrameworkEvent.ERROR, th);
+            }
         }
     }
 

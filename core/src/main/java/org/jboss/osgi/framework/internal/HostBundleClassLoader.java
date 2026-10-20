@@ -76,9 +76,10 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
         if (className.startsWith("java."))
             return null;
 
+        Class<?> result;
         WeavingContext context = WeavingContext.create(getBundleState(), getDefiningRevision());
         try {
-            return super.loadClassLocal(className, resolve);
+            result = super.loadClassLocal(className, resolve);
         } catch (LinkageError err) {
             ContextClass wovenClass = context.getContextClass(className);
             if (wovenClass != null) {
@@ -87,6 +88,38 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
             throw err;
         } finally {
             context.close();
+        }
+
+        // A class that another module loads from this bundle, e.g. through an import, triggers the lazy activation also
+        // when it was defined before
+        if (result != null) {
+            lazyClassRequested(className);
+        }
+        return result;
+    }
+
+    /**
+     * A class was requested from the bundle that defined it. The module class loader returns a class that it defined
+     * before without defining it again: the request, not the definition, triggers the lazy activation (4.4.6.2), e.g. of
+     * a bundle that was stopped and started again.
+     */
+    static void lazyClassRequested(Class<?> loadedClass) {
+        ClassLoader loader = loadedClass.getClassLoader();
+        if (loader instanceof HostBundleClassLoader) {
+            ((HostBundleClassLoader) loader).lazyClassRequested(loadedClass.getName());
+        }
+    }
+
+    private void lazyClassRequested(String className) {
+        int index = className.lastIndexOf('.');
+        String path = index > 0 ? className.substring(0, index).replace('.', '/') : "";
+        if (lazyFilter.accept(path) == false)
+            return;
+        UserBundleState bundleState = getBundleState();
+        if (bundleState.awaitLazyActivation()) {
+            LazyActivationTracker.requestClass(bundleState, className);
+        } else {
+            bundleState.lazyClassLoaded();
         }
     }
 
@@ -109,7 +142,8 @@ final class HostBundleClassLoader extends BundleReferenceClassLoader<UserBundleS
     @Override
     protected void preDefine(ClassSpec classSpec, String className) {
         if (getBundleState().awaitLazyActivation()) {
-            String path = className.substring(0, className.lastIndexOf('.')).replace('.', '/');
+            int index = className.lastIndexOf('.');
+            String path = index > 0 ? className.substring(0, index).replace('.', '/') : "";
             if (lazyFilter.accept(path)) {
                 LazyActivationTracker.preDefineClass(getBundleState(), className);
             }

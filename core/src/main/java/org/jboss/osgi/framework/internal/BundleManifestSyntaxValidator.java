@@ -175,7 +175,8 @@ final class BundleManifestSyntaxValidator {
 
     /**
      * Bundle-NativeCode (3.10): every clause has at least one path, except the optional '*' at the end; an osversion is
-     * a version range; a selection-filter is a valid filter (NATIVECODE_ERROR)
+     * a version range; a selection-filter is a valid filter (NATIVECODE_ERROR). Like in the other headers, a trailing
+     * ';' of a clause and a trailing ',' of the header are tolerated
      */
     private void validateNativeCode() throws BundleException {
         String value = manifestHeaders.get(Constants.BUNDLE_NATIVECODE);
@@ -183,14 +184,19 @@ final class BundleManifestSyntaxValidator {
             return;
         assertQuotesTerminated(Constants.BUNDLE_NATIVECODE, value);
         List<String> clauseSpecs = split(value, ',');
+        if (clauseSpecs.size() > 1 && clauseSpecs.get(clauseSpecs.size() - 1).trim().isEmpty())
+            clauseSpecs.remove(clauseSpecs.size() - 1);
         for (int i = 0; i < clauseSpecs.size(); i++) {
             String clauseSpec = clauseSpecs.get(i).trim();
             if (clauseSpec.equals("*") && i == clauseSpecs.size() - 1)
                 continue;
             boolean path = false;
             boolean parameter = false;
-            for (String part : split(clauseSpec, ';')) {
-                part = part.trim();
+            List<String> parts = split(clauseSpec, ';');
+            for (int j = 0; j < parts.size(); j++) {
+                String part = parts.get(j).trim();
+                if (part.isEmpty() && j > 0 && j == parts.size() - 1)
+                    continue;
                 int index = indexOfUnquoted(part, '=');
                 if (index < 0) {
                     if (part.isEmpty() || unquote(part).isEmpty() || parameter)

@@ -50,6 +50,7 @@ import org.osgi.framework.namespace.BundleNamespace;
 import org.osgi.framework.namespace.HostNamespace;
 import org.osgi.framework.namespace.IdentityNamespace;
 import org.osgi.framework.namespace.NativeNamespace;
+import org.osgi.framework.namespace.PackageNamespace;
 
 /**
  * An abstract bundle revision.
@@ -97,6 +98,12 @@ abstract class BundleStateRevision extends AbstractCommonBundleRevision {
                     if (brev instanceof SystemBundleRevision && (BundleNamespace.BUNDLE_NAMESPACE.equals(namespace) || HostNamespace.HOST_NAMESPACE.equals(namespace))) {
                         atts = new LinkedHashMap<String, Object>(atts);
                         atts.put(namespace, Arrays.asList(String.valueOf(atts.get(namespace)), org.osgi.framework.Constants.SYSTEM_BUNDLE_SYMBOLICNAME));
+                    }
+                    // So is the bundle-symbolic-name of its package exports, which an Import-Package may select (3.6.5)
+                    if (brev instanceof SystemBundleRevision && PackageNamespace.PACKAGE_NAMESPACE.equals(namespace)) {
+                        atts = new LinkedHashMap<String, Object>(atts);
+                        atts.put(PackageNamespace.CAPABILITY_BUNDLE_SYMBOLICNAME_ATTRIBUTE,
+                                Arrays.asList(metadata.getBundleSymbolicName(), org.osgi.framework.Constants.SYSTEM_BUNDLE_SYMBOLICNAME));
                     }
                     // The identity, bundle and host capabilities of a connect bundle are tagged
                     if (CONNECT_TAGGED_NAMESPACES.contains(namespace) && storageState.isConnectBundle()) {

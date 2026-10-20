@@ -151,6 +151,7 @@ final class FallbackLoader implements LocalLoader {
                 ModuleClassLoader moduleClassLoader = brev.getModuleClassLoader();
                 LOGGER.tracef("Fallback loader loaded class [%s] from module: %s", className, brev);
                 result = moduleClassLoader.loadClass(className);
+                HostBundleClassLoader.lazyClassRequested(result);
             }
             catch (ClassNotFoundException ex) {
                 LOGGER.warnf("Fallback loader cannot load class [%s] from module: %s", className, brev);
@@ -235,6 +236,10 @@ final class FallbackLoader implements LocalLoader {
         XBundleRevision brev = context.targetRevision;
         if (brev == null || context.capability == null || context.requirement == null)
             return;
+        // Another thread wired the package while this one resolved the exporter without the lock of this loader: the
+        // dynamic import has one wire, the class is loaded from its exporter
+        if (findWiredRevision(context))
+            return;
         BundleCapability bcap = (BundleCapability) context.capability;
         BundleRequirement breq = (BundleRequirement) context.requirement;
         AbstractBundleWire wire = new AbstractBundleWire(bcap, breq, brev, hostRev);
@@ -284,7 +289,7 @@ final class FallbackLoader implements LocalLoader {
                     return;
                 // A resource in a directory that is not a package is found by its content, the capabilities of the
                 // module bundles name every path of a module
-                findResourceDirectory(context);
+                findResourceDirectory(context, matchingPatterns);
                 if (context.targetRevision == null) {
                     findInResolvedRevisions(context, matchingPatterns);
                 }
@@ -394,7 +399,9 @@ final class FallbackLoader implements LocalLoader {
             for (XBundle bundle : resolved) {
                 if (bundle != hostBundle) {
                     XBundleRevision brev = bundle.getBundleRevision();
-                    if (bundle.getBundleId() > 0 && !brev.isFragment() && matches.get(brev) == null) {
+                    // A revision that a refresh refreshes without the framework wiring lock gets no new wires
+                    boolean hidden = ((BundleManagerPlugin) bundleManager).isHiddenByRefresh(brev, hostRev);
+                    if (bundle.getBundleId() > 0 && !brev.isFragment() && !hidden && matches.get(brev) == null) {
                         XPackageCapability bcap = getCapabilityCandidate(context, pkgreq, brev);
                         if (bcap != null && isUsesConsistent(bcap)) {
                             matches.put(brev, bcap);
@@ -553,10 +560,11 @@ final class FallbackLoader implements LocalLoader {
 
     /**
      * A directory like META-INF/services is not a package and cannot be exported. A dynamic import pattern like
-     * META-INF.* finds a resource in it in the content of a resolved bundle, as the class loading of WildFly modules does
-     * for the ServiceLoader.
+     * META-INF.* finds a resource in it in the content of a resolved bundle whose capabilities name the directory, as
+     * those of a module bundle name every path of the module (3.9.4: only an exported package is visible). The bundle
+     * must have the resource, not every module that names the directory has it.
      */
-    private void findResourceDirectory(DynamicLoadContext context) {
+    private void findResourceDirectory(DynamicLoadContext context, List<XPackageRequirement> matchingPatterns) {
         if (context.resName.endsWith(".class") || isPackageName(context.packageName))
             return;
         List<XBundle> resolved = new ArrayList<XBundle>(bundleManager.getBundles(Bundle.RESOLVED | Bundle.ACTIVE | Bundle.STARTING));
@@ -569,8 +577,12 @@ final class FallbackLoader implements LocalLoader {
         for (XBundle bundle : resolved) {
             XBundleRevision brev = bundle.getBundleRevision();
             if (bundle != hostBundle && bundle.getBundleId() > 0 && !brev.isFragment() && brev.getEntry(context.resName) != null) {
-                context.targetRevision = brev;
-                return;
+                for (XPackageRequirement pkgreq : matchingPatterns) {
+                    if (getCapabilityCandidate(context, pkgreq, brev) != null) {
+                        context.targetRevision = brev;
+                        return;
+                    }
+                }
             }
         }
     }

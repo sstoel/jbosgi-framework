@@ -46,6 +46,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -110,9 +111,12 @@ import org.osgi.framework.connect.ModuleConnector;
 import org.osgi.framework.hooks.bundle.CollisionHook;
 import org.osgi.framework.launch.Framework;
 import org.osgi.framework.startlevel.FrameworkStartLevel;
+import org.osgi.framework.wiring.BundleRevision;
+import org.osgi.framework.wiring.BundleRevisions;
 import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.framework.wiring.FrameworkWiring;
+import org.osgi.resource.Resource;
 import org.osgi.service.resolver.ResolutionException;
 
 /**
@@ -168,6 +172,9 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     private final ShutdownContainer shutdownContainer;
     private final Set<ExecutorService> executorServices = new HashSet<ExecutorService>();
     private final Map<String, InstallLock> installLocks = new HashMap<String, InstallLock>();
+    // The bundles that a refresh refreshes without the framework wiring lock, and their revisions when it began
+    private final Set<XBundle> refreshingBundles = ConcurrentHashMap.newKeySet();
+    private final Set<XBundleRevision> refreshingRevisions = ConcurrentHashMap.newKeySet();
     private Thread stopThread;
     private final Map<String, Object> properties = new HashMap<String, Object>();
     private final AtomicInteger managerState = new AtomicInteger(Bundle.INSTALLED);
@@ -984,6 +991,39 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         if (!candidates.isEmpty()) {
             throw new BundleException(MESSAGES.nameAndVersionAlreadyInstalled(symbolicName, version), BundleException.DUPLICATE_BUNDLE_ERROR);
         }
+    }
+
+    /**
+     * The bundles are refreshed without the framework wiring lock: until {@link #endRefresh(Collection)} their revisions
+     * are no providers for other bundles, which would be wired to revisions that the refresh removes.
+     */
+    void beginRefresh(Collection<XBundle> bundles) {
+        for (XBundle bundle : bundles) {
+            refreshingBundles.add(bundle);
+            for (BundleRevision brev : bundle.adapt(BundleRevisions.class).getRevisions())
+                refreshingRevisions.add((XBundleRevision) brev);
+        }
+    }
+
+    void endRefresh(Collection<XBundle> bundles) {
+        for (XBundle bundle : bundles) {
+            refreshingBundles.remove(bundle);
+            Iterator<XBundleRevision> itrev = refreshingRevisions.iterator();
+            while (itrev.hasNext()) {
+                if (itrev.next().getBundle() == bundle)
+                    itrev.remove();
+            }
+        }
+    }
+
+    /**
+     * A revision that a refresh refreshes without the framework wiring lock is no provider for a requirer that the
+     * refresh does not refresh
+     */
+    boolean isHiddenByRefresh(Resource provider, Resource requirer) {
+        if (refreshingRevisions.isEmpty() || refreshingRevisions.contains(provider) == false)
+            return false;
+        return (requirer instanceof XBundleRevision && refreshingBundles.contains(((XBundleRevision) requirer).getBundle())) == false;
     }
 
     void unresolveBundle(UserBundleState userBundle) {

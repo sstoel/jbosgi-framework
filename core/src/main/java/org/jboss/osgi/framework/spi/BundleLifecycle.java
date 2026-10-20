@@ -62,5 +62,15 @@ public interface BundleLifecycle {
         void refreshCurrentRevision(XBundleRevision brev) throws BundleException;
 
         void endBundleRefresh(XBundle bundle);
+
+        /**
+         * Whether a refresh may hold the framework wiring lock while it refreshes the bundles with this policy. A policy
+         * that refreshes the revisions with operations of a server returns false: another operation of the server may
+         * hold the server's lock and wait for the wiring lock. The bundles of the refresh stay locked, and the revisions
+         * that they refresh get no new wires from other bundles meanwhile.
+         */
+        default boolean isWiringLockAllowed() {
+            return true;
+        }
     }
 }

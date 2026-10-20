@@ -202,7 +202,8 @@ public final class NativeCodeImpl implements NativeCode {
         if (params.isEmpty())
             throw MESSAGES.cannotFindNativeCodeHeader(userRev);
 
-        // The paths of a clause share its parameters: group them into the clauses of the header
+        // The paths of a clause share its attribute map, every clause has a map of its own: group them into the clauses
+        // of the header
         List<List<ParameterizedAttribute>> clauses = new ArrayList<List<ParameterizedAttribute>>();
         List<ParameterizedAttribute> clause = null;
         for (ParameterizedAttribute param : params) {

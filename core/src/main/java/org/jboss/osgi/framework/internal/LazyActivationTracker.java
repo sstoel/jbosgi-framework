@@ -59,6 +59,15 @@ final class LazyActivationTracker {
         }
     }
 
+    // A class that was defined before is requested from a bundle that awaits its lazy activation
+    static void requestClass(UserBundleState userBundle, String className) {
+        LOGGER.tracef("requestClass %s from: %s", className, userBundle);
+        addDefinedClass(userBundle, className);
+        if (initiatorAssociation.get() == null) {
+            processActivationStack();
+        }
+    }
+
     static void stopTracking(UserBundleState userBundle, String className) {
         LOGGER.tracef("stopTracking %s from: %s", className, userBundle);
         initiatorAssociation.remove();

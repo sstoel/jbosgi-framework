@@ -151,6 +151,7 @@ final class HostBundleRevision extends UserBundleRevision {
         LazyActivationTracker.startTracking(getBundleState(), className);
         try {
             Class<?> loadedClass = loadClassInternal(className);
+            HostBundleClassLoader.lazyClassRequested(loadedClass);
             LazyActivationTracker.processLoadedClass(loadedClass);
             return loadedClass;
         } finally {

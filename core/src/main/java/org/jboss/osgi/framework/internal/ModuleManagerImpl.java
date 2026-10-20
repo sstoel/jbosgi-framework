@@ -709,9 +709,15 @@ public final class ModuleManagerImpl implements ModuleManager {
                     exportedPaths.add(path);
                 }
                 // An Import-Package dependency only re-exports the packages that the host also exports (substitution).
-                // Re-exporting more makes the linking of the module walk every path of the dependency graph
-                if (importPaths != null)
-                    exportedPaths.retainAll(importPaths);
+                // Re-exporting more makes the linking of the module walk every path of the dependency graph. When the
+                // provider is also a required bundle, the host re-exports the packages that it exports from there too
+                // (a facade or split package, 3.13.3)
+                if (importPaths != null) {
+                    Set<String> providedPaths = new HashSet<String>(importPaths);
+                    if (requiredPaths != null)
+                        providedPaths.addAll(requiredPaths);
+                    exportedPaths.retainAll(providedPaths);
+                }
                 if (reexportPaths != null)
                     exportedPaths.addAll(reexportPaths);
                 exportFilter = exportedPaths.isEmpty() ? PathFilters.rejectAll() : PathFilters.in(exportedPaths);

@@ -135,9 +135,9 @@ public final class LockManagerImpl implements LockManager {
 
             LOGGER.tracef("LockManager unlocked: %s", context);
 
-            // Pop the current context stack
+            // Remove the context from the stack, a context that is not the last one may be unlocked first
             Stack<LockContext> contextStack = lockContextAssociation.get();
-            contextStack.pop();
+            contextStack.remove(context);
             if (contextStack.isEmpty()) {
                 lockContextAssociation.remove();
             }

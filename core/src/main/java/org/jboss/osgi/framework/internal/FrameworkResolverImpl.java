@@ -197,7 +197,7 @@ final class FrameworkResolverImpl implements XResolver {
                 // The context adds attachable fragments and unresolved bundles, a revision that the hooks removed stays removed
                 XResolveContext expanded = resolver.createResolveContext(env, getFilteredResources(hookregs, manres), getFilteredResources(hookregs, optres));
                 final Collection<Resource> filteredMandatory = getResolvableResources(hookregs, expanded.getMandatoryResources());
-                final Collection<Resource> filteredOptional = getResolvableResources(hookregs, expanded.getOptionalResources());
+                final Collection<Resource> filteredOptional = withoutRefreshing(bundleManager, getResolvableResources(hookregs, expanded.getOptionalResources()));
                 resolveContext = new AbstractResolveContext(env) {
 
                     @Override
@@ -209,12 +209,17 @@ final class FrameworkResolverImpl implements XResolver {
                     public Collection<Resource> getOptionalResources() {
                         return Collections.unmodifiableCollection(filteredOptional);
                     }
+
+                    @Override
+                    public List<Capability> findProviders(Requirement req) {
+                        return withoutRefreshing(bundleManager, req, super.findProviders(req));
+                    }
                 };
             } else {
                 filterSingletons(manres, optres);
                 // The resolve context enforces the singleton policy, also for the singletons pulled in as providers
                 XResolveContext expanded = resolver.createResolveContext(env, manres, optres);
-                resolveContext = new SingletonResolveContext(env, expanded.getMandatoryResources(), expanded.getOptionalResources());
+                resolveContext = new SingletonResolveContext(bundleManager, env, expanded.getMandatoryResources(), expanded.getOptionalResources());
             }
 
             Map<Resource, List<Wire>> wiremap;
@@ -286,12 +291,14 @@ final class FrameworkResolverImpl implements XResolver {
      */
     static final class SingletonResolveContext extends AbstractResolveContext {
 
+        private final BundleManagerPlugin bundleManager;
         private final Collection<Resource> mandatory = new ArrayList<Resource>();
         private final Collection<Resource> optional = new ArrayList<Resource>();
         private final Map<String, Resource> chosen = new HashMap<String, Resource>();
 
-        SingletonResolveContext(XEnvironment env, Collection<Resource> mandatory, Collection<Resource> optional) {
+        SingletonResolveContext(BundleManagerPlugin bundleManager, XEnvironment env, Collection<Resource> mandatory, Collection<Resource> optional) {
             super(env);
+            this.bundleManager = bundleManager;
             Iterator<XResource> itres = env.getResources(Collections.singleton(XResource.TYPE_BUNDLE));
             while (itres.hasNext()) {
                 XResource res = itres.next();
@@ -299,7 +306,7 @@ final class FrameworkResolverImpl implements XResolver {
                     chosen.put(res.getIdentityCapability().getName(), res);
             }
             this.mandatory.addAll(getAllowed(mandatory));
-            this.optional.addAll(getAllowed(optional));
+            this.optional.addAll(getAllowed(withoutRefreshing(bundleManager, optional)));
         }
 
         private Collection<Resource> getAllowed(Collection<Resource> resources) {
@@ -345,7 +352,7 @@ final class FrameworkResolverImpl implements XResolver {
 
         @Override
         public List<Capability> findProviders(Requirement req) {
-            List<Capability> providers = super.findProviders(req);
+            List<Capability> providers = withoutRefreshing(bundleManager, req, super.findProviders(req));
             Iterator<Capability> itcap = providers.iterator();
             while (itcap.hasNext()) {
                 Resource res = itcap.next().getResource();
@@ -354,6 +361,27 @@ final class FrameworkResolverImpl implements XResolver {
             }
             return providers;
         }
+    }
+
+    // The revisions that a refresh refreshes without the framework wiring lock are not resolved with other bundles
+    private static Collection<Resource> withoutRefreshing(BundleManagerPlugin bundleManager, Collection<Resource> optional) {
+        Collection<Resource> result = new ArrayList<Resource>(optional);
+        Iterator<Resource> itres = result.iterator();
+        while (itres.hasNext()) {
+            if (bundleManager.isHiddenByRefresh(itres.next(), null))
+                itres.remove();
+        }
+        return result;
+    }
+
+    // Nor are they providers for the requirements of other bundles
+    private static List<Capability> withoutRefreshing(BundleManagerPlugin bundleManager, Requirement req, List<Capability> providers) {
+        Iterator<Capability> itcap = providers.iterator();
+        while (itcap.hasNext()) {
+            if (bundleManager.isHiddenByRefresh(itcap.next().getResource(), req.getResource()))
+                itcap.remove();
+        }
+        return providers;
     }
 
     private void filterSingletons(Collection<? extends Resource> manres, Collection<Resource> optres) {
