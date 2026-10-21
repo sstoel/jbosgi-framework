@@ -120,12 +120,19 @@ public final class StorageManagerImpl implements StorageManager {
             for (File storageDir : storageDirs) {
                 lastBundleId = Math.max(lastBundleId, getBundleId(storageDir));
 
-                // A directory that cannot be restored, like one that a failed install left behind, is skipped
                 StorageState storageState;
                 try {
+                    StorageState.deleteTemporaryFiles(storageDir);
                     storageState = restoreStorageState(storageDir);
-                } catch (IOException | RuntimeException ex) {
-                    LOGGER.warnf(ex, "Cannot restore the bundle storage, it is skipped: %s", storageDir);
+                } catch (IOException ex) {
+                    // The storage may be readable on the next start, it is kept
+                    LOGGER.warnf(ex, "Cannot read the bundle storage, it is skipped: %s", storageDir);
+                    continue;
+                } catch (RuntimeException ex) {
+                    // A directory without complete properties or without the content they name, like one that a failed
+                    // or interrupted install left behind, never becomes a bundle (connect/24)
+                    LOGGER.warnf(ex, "Removing the bundle storage that cannot be restored: %s", storageDir);
+                    deleteRecursive(storageDir);
                     continue;
                 }
                 if (storageState == null)

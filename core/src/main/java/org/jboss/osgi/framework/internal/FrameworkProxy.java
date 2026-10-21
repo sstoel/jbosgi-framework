@@ -370,7 +370,7 @@ final class FrameworkProxy implements Framework {
             @Override
             public void run() {
                 try {
-                    stoppingManager.shutdownManager(true);
+                    stoppingManager.completeShutdown(FrameworkEvent.STOPPED_UPDATE);
                     if (targetState == Bundle.STARTING) {
                         init();
                     }
@@ -386,6 +386,9 @@ final class FrameworkProxy implements Framework {
         };
         synchronized (this) {
             if (updateThread != null)
+                return;
+            // The framework is STOPPING when this returns. A stop that is in progress is not followed by a start
+            if (stoppingManager.beginShutdown() == false)
                 return;
             updateThread = new Thread(cmd, "Framework update thread");
             updateThread.start();

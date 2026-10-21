@@ -111,12 +111,7 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         boolean relaunch = refreshesFrameworkExtension(bundles);
         if (relaunch && bundleManager.isLaunchedByFramework()) {
             LOGGER.debugf("Refresh of framework extension, stop the framework: %s", bundles);
-            new Thread("Framework refresh thread") {
-                @Override
-                public void run() {
-                    bundleManager.shutdownManager(FrameworkEvent.STOPPED_SYSTEM_REFRESHED);
-                }
-            }.start();
+            bundleManager.stopFramework(FrameworkEvent.STOPPED_SYSTEM_REFRESHED, null);
             return;
         }
 

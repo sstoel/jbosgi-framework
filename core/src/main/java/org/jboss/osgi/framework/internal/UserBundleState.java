@@ -98,6 +98,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     private final AtomicBoolean awaitLazyActivation = new AtomicBoolean();
     // A class was loaded from the bundle while it waited for its start level to be activated lazily
     private final AtomicBoolean classLoadedBeforeLazyStart = new AtomicBoolean();
+    // The activation policy option of the last start, null if the bundle was not started since it was installed
+    private volatile Boolean lastStartUsedActivationPolicy;
     private final AtomicInteger revisionIndex = new AtomicInteger();
     private final List<UserBundleRevision> revisions = new ArrayList<UserBundleRevision>();
 
@@ -279,16 +281,24 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
     @Override
     int updateInternal(InputStream input) throws BundleException {
+        return updateInternal(input, getState());
+    }
+
+    @Override
+    int updateInternal(InputStream input, int originalState) throws BundleException {
 
         LOGGER.debugf("Updating bundle: %s", this);
 
-        boolean restart = false;
-        // A bundle that is started with its declared activation policy is started that way again: a lazily started
-        // bundle waits for its activation again
+        // A bundle that was started with its declared activation policy is started that way again, also after a
+        // transient start: a lazily started bundle waits for its activation again (fuzz/17)
         int restartOptions = Bundle.START_TRANSIENT;
-        if (adapt(BundleStartLevel.class).isActivationPolicyUsed())
+        Boolean policyUsed = lastStartUsedActivationPolicy;
+        if (policyUsed != null ? policyUsed.booleanValue() : adapt(BundleStartLevel.class).isActivationPolicyUsed())
             restartOptions |= Bundle.START_ACTIVATION_POLICY;
 
+        // The bundle manager stopped the bundle before it took the locks of the update. If this bundle's state was
+        // originally ACTIVE or STARTING, the updated bundle is started again
+        boolean restart = isFragment() == false && (originalState == Bundle.ACTIVE || originalState == Bundle.STARTING);
         if (isFragment() == false) {
             int state = getState();
             if (state == Bundle.ACTIVE || state == Bundle.STARTING || state == Bundle.STOPPING) {
@@ -385,8 +395,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
                 URL updateURL = new URL(updateLocation);
                 rootFile = AbstractVFS.toVirtualFile(updateURL);
             } else {
-                // The content at the original location, like at install. A location that is not a URL that can be
-                // read gives the current content
+                // The content at the original location, like at install. A location that is not a URL gives the
+                // current content
                 rootFile = getContentAtLocation();
                 if (rootFile == null)
                     rootFile = getCopyOfContent(getDeployment().getRoot());
@@ -405,16 +415,30 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         dep.setBundleUpdate(true);
         dep.setAutoStart(false);
 
-        // Check for symbolic name, version uniqueness
+        // Check for symbolic name, version uniqueness. The updates and installs of a symbolic name are serialized: the
+        // check and the creation of the revision are one step, a concurrent install of the same name and version cannot
+        // pass the check as well (concurrency/04)
         String symbolicName = metadata.getBundleSymbolicName();
         Version bundleVersion = metadata.getBundleVersion();
+        storageState.setSymbolicName(symbolicName);
         BundleManagerPlugin bundleManager = getBundleManager();
-        bundleManager.checkUniqunessPolicy(this, symbolicName, bundleVersion, CollisionHook.UPDATING);
+        String nameKey = BundleManagerPlugin.getNameLockKey(symbolicName);
+        Object nameLock = bundleManager.acquireInstallLock(nameKey);
+        try {
+            bundleManager.lockName(this, nameLock);
+            try {
+                bundleManager.checkUniqunessPolicy(this, symbolicName, bundleVersion, CollisionHook.UPDATING);
 
-        BundleContext syscontext = getFrameworkState().getSystemBundle().getBundleContext();
-        BundleLifecycle bundleLifecycle = getFrameworkState().getCoreServices().getBundleLifecycle();
-        XBundleRevision brev = bundleLifecycle.createBundleRevision(syscontext, dep);
-        return UserBundleRevision.assertBundleRevision(brev);
+                BundleContext syscontext = getFrameworkState().getSystemBundle().getBundleContext();
+                BundleLifecycle bundleLifecycle = getFrameworkState().getCoreServices().getBundleLifecycle();
+                XBundleRevision brev = bundleLifecycle.createBundleRevision(syscontext, dep);
+                return UserBundleRevision.assertBundleRevision(brev);
+            } finally {
+                bundleManager.unlockName(nameLock);
+            }
+        } finally {
+            bundleManager.releaseInstallLock(nameKey, nameLock);
+        }
     }
 
     // The revisions do not share their content, the content of the replaced revision is closed when it is removed
@@ -443,7 +467,8 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         return true;
     }
 
-    private VirtualFile getContentAtLocation() {
+    // The update at a location that is a URL. A URL that cannot be read fails the update, nothing is updated (services/18)
+    private VirtualFile getContentAtLocation() throws BundleException {
         URL locationURL;
         try {
             locationURL = new URL(getLocation());
@@ -458,8 +483,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
                 input.close();
             }
         } catch (IOException ex) {
-            LOGGER.debugf(ex, "Cannot read the update from the location of: %s", this);
-            return null;
+            throw new BundleException(MESSAGES.cannotReadUpdateFromLocation(this, getLocation()), BundleException.READ_ERROR, ex);
         }
     }
 
@@ -721,8 +745,13 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         if (getBundleContextInternal() == null)
             createBundleContext();
 
+        // The activator and the listeners of the state change are not called under the framework wiring lock that the
+        // resolve needed (concurrency/05)
+        getBundleManager().releaseWiringLockBeforeActivation(this);
+
         // #5 If the START_ACTIVATION_POLICY option is set and this bundle's declared activation policy is lazy
         boolean useActivationPolicy = (options & START_ACTIVATION_POLICY) != 0;
+        lastStartUsedActivationPolicy = Boolean.valueOf(useActivationPolicy);
         // A bundle from which a class was loaded while it waited for its start level is activated right away
         if (isActivationLazy() && useActivationPolicy && classLoadedBeforeLazyStart.getAndSet(false) == false) {
 
@@ -735,6 +764,14 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             // The bundle now awaits its activation by the first class load (4.4.6.2)
             awaitLazyActivation.set(true);
             changeState(STARTING, 0);
+            // The framework began to stop after the start level check: its final sweep may have missed this bundle
+            if (getBundleManager().isFrameworkStopping()) {
+                awaitLazyActivation.set(false);
+                destroyBundleContext();
+                changeState(RESOLVED, 0);
+                LOGGER.debugf("Framework stopping, bundle not started: %s", this);
+                return;
+            }
             deferStartEvent(BundleEvent.LAZY_ACTIVATION);
             return;
         }
@@ -746,6 +783,17 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             changeState(Bundle.STARTING);
         } catch (LifecycleInterceptorException ex) {
             throw MESSAGES.cannotTransitionToStarting(ex, this);
+        }
+
+        // The framework began to stop after the start level check, while this bundle was resolved: the final sweep of
+        // the stop only stops bundles that are STARTING or ACTIVE, it may have missed this one. It is not activated
+        if (getBundleManager().isFrameworkStopping()) {
+            LOGGER.debugf("Framework stopping, bundle not started: %s", this);
+            changeState(Bundle.STOPPING);
+            removeServicesAndListeners();
+            destroyBundleContext();
+            changeState(Bundle.RESOLVED, BundleEvent.STOPPED);
+            return;
         }
 
         // #8 The BundleActivator.start(BundleContext) method of this bundle is called

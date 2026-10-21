@@ -136,6 +136,7 @@ abstract class UserBundleRevisionFactory<R extends UserBundleRevision> {
                 Integer startlevel = dep.getStartLevel();
                 StorageManager storageManager = frameworkState.getStorageManager();
                 storageState = storageManager.createStorageState(revIdentifier.getRevisionId(), location, startlevel, rootFile);
+                storageState.setSymbolicName(dep.getSymbolicName());
                 dep.putAttachment(STORAGE_STATE_KEY, storageState);
             } catch (IOException ex) {
                 throw MESSAGES.cannotSetupStorage(ex, rootFile);

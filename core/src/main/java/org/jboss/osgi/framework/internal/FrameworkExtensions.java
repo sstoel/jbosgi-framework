@@ -442,6 +442,20 @@ final class FrameworkExtensions {
         }
     }
 
+    /**
+     * Forget the extensions of a framework that stopped: the stopped framework keeps no reference to the revisions,
+     * which reach the bundles and class loaders of its last run (connect/16)
+     */
+    void release() {
+        synchronized (attached) {
+            attached.clear();
+            attachedBundleIds.clear();
+        }
+        synchronized (startedActivators) {
+            startedActivators.clear();
+        }
+    }
+
     private BundleContext getSystemContext() {
         return bundleManager.getSystemBundle().getBundleContext();
     }

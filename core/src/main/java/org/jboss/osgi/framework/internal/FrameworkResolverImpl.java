@@ -21,6 +21,7 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.internal.InternalConstants.NATIVE_LIBRARY_METADATA_KEY;
 import static org.jboss.osgi.resolver.ResolverMessages.MESSAGES;
 
@@ -402,8 +403,8 @@ final class FrameworkResolverImpl implements XResolver {
 
     private Map<Resource, Wiring> applyResolverResults(XEnvironment environment, Map<Resource, List<Wire>> wiremap) throws ResolutionException {
 
-        // [TODO] Revisit how we apply the resolution results
-        // An exception in one of the steps may leave the framework partially modified
+        // The fragments, the module specs and the module services of this resolve are removed again when one of them
+        // cannot be created: the bundles stay INSTALLED and can be resolved later (fuzz/50)
 
         // Transform the wiremap to {@link BundleRevision} and {@link BundleWire}
         Map<BundleRevision, List<BundleWire>> brevmap = new LinkedHashMap<BundleRevision, List<BundleWire>>();
@@ -420,21 +421,31 @@ final class FrameworkResolverImpl implements XResolver {
             wiremap.put(res, wires);
         }
 
-        // Attach the fragments to host
-        attachFragmentsToHost(brevmap);
-
-        // Resolve native code libraries if there are any
+        List<XBundleRevision> withModule = new ArrayList<XBundleRevision>();
         try {
-            resolveNativeCodeLibraries(brevmap);
-        } catch (BundleException ex) {
-            throw new ResolutionException(ex);
+            // Attach the fragments to host
+            attachFragmentsToHost(brevmap);
+
+            // Resolve native code libraries if there are any
+            try {
+                resolveNativeCodeLibraries(brevmap);
+            } catch (BundleException ex) {
+                throw new ResolutionException(ex);
+            }
+
+            // For every resolved host bundle create the {@link ModuleSpec}
+            addModules(brevmap, withModule);
+
+            // For every resolved host bundle create a {@link Module} service
+            createModuleServices(brevmap);
+        } catch (ResolutionException | RuntimeException ex) {
+            rollbackResolverResults(brevmap, withModule);
+            if (ex instanceof ResolutionException)
+                throw (ResolutionException) ex;
+            ResolutionException resex = new ResolutionException(ex.getMessage());
+            resex.initCause(ex);
+            throw resex;
         }
-
-        // For every resolved host bundle create the {@link ModuleSpec}
-        addModules(brevmap);
-
-        // For every resolved host bundle create a {@link Module} service
-        createModuleServices(brevmap);
 
         // Construct and apply the resource wiring map
         Map<Resource, Wiring> wirings = environment.updateWiring(wiremap);
@@ -483,7 +494,7 @@ final class FrameworkResolverImpl implements XResolver {
         }
     }
 
-    private void addModules(Map<BundleRevision, List<BundleWire>> wiremap) {
+    private void addModules(Map<BundleRevision, List<BundleWire>> wiremap, List<XBundleRevision> withModule) {
         // The module of a requirer may depend on the wires of a provider that is wired by the same resolve operation
         ModuleManagerImpl.setResolveWires(wiremap);
         try {
@@ -491,11 +502,30 @@ final class FrameworkResolverImpl implements XResolver {
                 XBundleRevision brev = (XBundleRevision) entry.getKey();
                 if (brev.isFragment() == false) {
                     List<BundleWire> wires = wiremap.get(brev);
+                    withModule.add(brev);
                     moduleManager.addModule(brev, wires);
                 }
             }
         } finally {
             ModuleManagerImpl.setResolveWires(null);
+        }
+    }
+
+    // Undo what a resolve that failed while it applied its results created
+    private void rollbackResolverResults(Map<BundleRevision, List<BundleWire>> wiremap, List<XBundleRevision> withModule) {
+        for (XBundleRevision brev : withModule) {
+            XBundle bundle = brev.getBundle();
+            if (bundle == null || bundle.getBundleId() == 0)
+                continue;
+            try {
+                moduleManager.removeModule(brev, moduleManager.getModuleIdentifier(brev));
+            } catch (RuntimeException ex) {
+                LOGGER.debugf(ex, "Cannot remove the module of: %s", brev);
+            }
+        }
+        for (BundleRevision brev : wiremap.keySet()) {
+            if (brev instanceof FragmentBundleRevision)
+                ((FragmentBundleRevision) brev).detachFromHosts();
         }
     }
 

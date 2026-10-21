@@ -153,6 +153,10 @@ public final class StartLevelManagerImpl implements StartLevelManager {
                 startLevel.incrementAndGet();
                 LOGGER.infoStartingBundlesForStartLevel(startLevel.get());
                 for (XBundle bundle : bundles) {
+                    // A stop of the framework cuts the increase short, the bundles are not started any more (shutdown/17)
+                    if (bundleManager.isFrameworkStopping())
+                        break;
+
                     // A bundle of the snapshot may have been uninstalled meanwhile, e.g. by the activator of another one
                     if (bundle.getBundleId() == 0 || bundle.isFragment() || bundle.getState() == Bundle.UNINSTALLED)
                         continue;

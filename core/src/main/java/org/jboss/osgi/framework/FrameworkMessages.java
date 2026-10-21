@@ -376,4 +376,7 @@ public interface FrameworkMessages {
 
     @Message(id = 11296, value = "Cannot access the connect content of: %s")
     IllegalStateException illegalStateCannotAccessConnectContent(@Cause Throwable cause, XBundleRevision brev);
+
+    @Message(id = 11307, value = "Cannot read the update of %s from its location: %s")
+    String cannotReadUpdateFromLocation(Bundle bundle, String location);
 }

@@ -30,6 +30,9 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.HashSet;
 import java.util.Properties;
 import java.util.Set;
@@ -56,7 +59,10 @@ public class StorageState {
     public static final String PROPERTY_START_LEVEL = "StartLevel";
     public static final String PROPERTY_JAVA_VERSION = "JavaVersion";
     public static final String PROPERTY_CONNECT_BUNDLE = "ConnectBundle";
+    public static final String PROPERTY_SYMBOLIC_NAME = "SymbolicName";
     public static final String BUNDLE_PERSISTENT_PROPERTIES = "bundle-persistent.properties";
+    // The suffix of a file that is written before it replaces the file of its name
+    private static final String TMP_SUFFIX = ".tmp";
     public static final String BUNDLE_DIRECTORY_PREFIX = "bundle-";
 
     private final File storageDir;
@@ -81,6 +87,8 @@ public class StorageState {
         String vfsLocation = props.getProperty(PROPERTY_BUNDLE_FILE);
         if (vfsLocation != null) {
             File revFile = new File(storageDir + "/" + vfsLocation);
+            if (revFile.isFile() == false)
+                throw new IllegalStateException("Bundle content missing: " + revFile);
             rootFile = AbstractVFS.toVirtualFile(revFile.toURI());
         }
         StorageState storageState = new StorageState(storageDir, rootFile, props);
@@ -104,19 +112,51 @@ public class StorageState {
             String bundleId = props.getProperty(StorageState.PROPERTY_BUNDLE_ID);
             String revision = props.getProperty(StorageState.PROPERTY_BUNDLE_REV);
             File revFile = new File(storageDir + File.separator + StorageState.BUNDLE_DIRECTORY_PREFIX + bundleId + "-rev-" + revision + ".jar");
-            FileOutputStream output = new FileOutputStream(revFile);
+            // The content is complete on disk before the properties name it, the properties are written last (connect/24)
             storageDir.mkdirs();
-            InputStream input = rootFile.openStream();
+            File tmpFile = new File(storageDir, revFile.getName() + TMP_SUFFIX);
             try {
-                VFSUtils.copyStream(input, output);
+                InputStream input = rootFile.openStream();
+                try {
+                    FileOutputStream output = new FileOutputStream(tmpFile);
+                    try {
+                        VFSUtils.copyStream(input, output);
+                        output.getFD().sync();
+                    } finally {
+                        output.close();
+                    }
+                } finally {
+                    input.close();
+                }
+                moveAtomically(tmpFile, revFile);
             } finally {
-                input.close();
-                output.close();
+                tmpFile.delete();
             }
             props.put(StorageState.PROPERTY_BUNDLE_FILE, revFile.getName());
         }
-        storageState.writeProperties();
+        storageState.storeProperties();
         return storageState;
+    }
+
+    /**
+     * Delete the temporary files that a write left behind when it was interrupted
+     */
+    public static void deleteTemporaryFiles(File storageDir) {
+        File[] files = storageDir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isFile() && file.getName().endsWith(TMP_SUFFIX))
+                    file.delete();
+            }
+        }
+    }
+
+    private static void moveAtomically(File source, File target) throws IOException {
+        try {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException ex) {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     public static Properties loadProperties(File storageDir) throws FileNotFoundException, IOException {
@@ -215,6 +255,21 @@ public class StorageState {
         }
     }
 
+    /**
+     * The symbolic name of the bundle of the revision, null if it has none or it was not recorded: the state of another
+     * bundle with the same location is not taken for it
+     */
+    public String getSymbolicName() {
+        return props.getProperty(PROPERTY_SYMBOLIC_NAME);
+    }
+
+    public void setSymbolicName(String symbolicName) {
+        if (symbolicName == null || symbolicName.equals(getSymbolicName()))
+            return;
+        getProperties().setProperty(PROPERTY_SYMBOLIC_NAME, symbolicName);
+        writeProperties();
+    }
+
     public void setJavaVersion(int version) {
         getProperties().setProperty(PROPERTY_JAVA_VERSION, Integer.toString(version));
         writeProperties();
@@ -242,15 +297,27 @@ public class StorageState {
 
     private void writeProperties() {
         try {
-            File propsFile = new File(getStorageDir() + "/" + BUNDLE_PERSISTENT_PROPERTIES);
-            FileOutputStream output = new FileOutputStream(propsFile);
+            storeProperties();
+        } catch (IOException ex) {
+            LOGGER.errorCannotWritePersistentStorage(ex, getStorageDir());
+        }
+    }
+
+    // The properties file is replaced as a whole: after a crash it has the old or the new properties
+    private synchronized void storeProperties() throws IOException {
+        File propsFile = new File(getStorageDir() + "/" + BUNDLE_PERSISTENT_PROPERTIES);
+        File tmpFile = new File(getStorageDir() + "/" + BUNDLE_PERSISTENT_PROPERTIES + TMP_SUFFIX);
+        try {
+            FileOutputStream output = new FileOutputStream(tmpFile);
             try {
                 getProperties().store(output, "Persistent Bundle Properties");
+                output.getFD().sync();
             } finally {
                 VFSUtils.safeClose(output);
             }
-        } catch (IOException ex) {
-            LOGGER.errorCannotWritePersistentStorage(ex, getStorageDir());
+            moveAtomically(tmpFile, propsFile);
+        } finally {
+            tmpFile.delete();
         }
     }
 

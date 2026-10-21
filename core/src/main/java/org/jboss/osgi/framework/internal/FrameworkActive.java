@@ -144,6 +144,7 @@ public final class FrameworkActive extends AbstractFrameworkService {
         FrameworkState frameworkState = injectedFramework.getValue();
         BundleManagerPlugin bundleManager = frameworkState.getBundleManager();
         SystemBundleState systemBundle = frameworkState.getSystemBundle();
+        bundleManager.frameworkStarted();
         systemBundle.changeState(Bundle.ACTIVE);
 
         // Increase to initial start level

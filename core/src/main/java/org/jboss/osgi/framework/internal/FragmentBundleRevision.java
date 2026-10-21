@@ -97,6 +97,15 @@ final class FragmentBundleRevision extends UserBundleRevision {
         attachedHosts.add(hostRev);
     }
 
+    // A resolve that attached the fragment failed
+    void detachFromHosts() {
+        if (attachedHosts == null)
+            return;
+        for (HostBundleRevision hostRev : attachedHosts)
+            hostRev.detachFragment(this);
+        attachedHosts = null;
+    }
+
     @Override
     public URL getLocalizationEntry(String path) {
 

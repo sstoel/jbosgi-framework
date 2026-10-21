@@ -162,6 +162,10 @@ final class RevisionContent implements EntriesProvider {
         } catch (IOException ex) {
             LOGGER.errorCannotGetEntry(ex, path, userRev);
             return null;
+        } catch (IllegalStateException ex) {
+            // The content was closed by its owner, e.g. the deployment of the revision
+            LOGGER.debugf(ex, "Content closed, no resource %s in: %s", path, userRev);
+            return null;
         }
         return getEntry(path);
     }
@@ -176,6 +180,10 @@ final class RevisionContent implements EntriesProvider {
             return child != null && isBelowRoot(child) ? getBundleURL(child) : null;
         } catch (IOException ex) {
             LOGGER.errorCannotGetEntry(ex, path, userRev);
+            return null;
+        } catch (IllegalStateException ex) {
+            // The content was closed by its owner, e.g. the deployment of the revision
+            LOGGER.debugf(ex, "Content closed, no entry %s in: %s", path, userRev);
             return null;
         }
     }
@@ -192,7 +200,7 @@ final class RevisionContent implements EntriesProvider {
             }
             Enumeration<URL> urls = virtualFile.findEntries(path, pattern, recurse);
             return getBundleURLs(urls);
-        } catch (IOException ex) {
+        } catch (IOException | IllegalStateException ex) {
             return null;
         }
     }
@@ -206,7 +214,7 @@ final class RevisionContent implements EntriesProvider {
                 return entryPaths;
             else
                 return null;
-        } catch (IOException ex) {
+        } catch (IOException | IllegalStateException ex) {
             return null;
         }
     }
@@ -283,10 +291,15 @@ final class RevisionContent implements EntriesProvider {
                 // A path that leaves the root of the content, e.g. through "..", is not an entry of the bundle
                 if (path == null)
                     throw new FileNotFoundException(url.toExternalForm());
-                VirtualFile real = (orgPath.equals(path) ? child : virtualFile.getChild(path));
-                if (real == null)
-                    throw new FileNotFoundException(url.toExternalForm());
-                return real.getStreamURL().openConnection();
+                try {
+                    VirtualFile real = (orgPath.equals(path) ? child : virtualFile.getChild(path));
+                    if (real == null)
+                        throw new FileNotFoundException(url.toExternalForm());
+                    return real.getStreamURL().openConnection();
+                } catch (IllegalStateException ex) {
+                    // The content was closed
+                    throw new IOException(ex);
+                }
             }
 
             // [TODO] overwrite hashCode for to prevent host address resolution

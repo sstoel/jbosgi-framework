@@ -27,6 +27,7 @@ import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 import java.security.AccessControlContext;
 import java.security.AccessController;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Dictionary;
@@ -212,10 +213,12 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         assert listener != null : "Null listener";
         // An invalid filter changes nothing: it is parsed before the existing registration is replaced
         Filter filter = (filterstr != null ? FrameworkUtil.createFilter(filterstr) : NoFilter.INSTANCE);
+        ServiceListenerRegistration slreg = new ServiceListenerRegistration(bundleState, listener, filter);
+        ListenerInfo replaced;
         synchronized (serviceListeners) {
             // If the context bundleState's list of listeners already contains a listener l such that (l==listener),
             // then this method replaces that listener's filter (which may be null) with the specified one (which may be null).
-            removeServiceListener(bundleState, listener);
+            replaced = removeServiceListenerLocked(bundleState, listener);
 
             List<ServiceListenerRegistration> listeners = serviceListeners.get(bundleState);
             if (listeners == null) {
@@ -223,23 +226,19 @@ final class FrameworkEventsImpl implements FrameworkEvents {
                 serviceListeners.put(bundleState, listeners);
             }
 
-            // Create the new listener registration
-            ServiceListenerRegistration slreg = new ServiceListenerRegistration(bundleState, listener, filter);
-
-            // The {@link ListenerHook} added method is called to provide the hook implementation with information on newly
-            // added service listeners.
-            // This method will be called as service listeners are added while this hook is registered
-            for (ListenerHook hook : getServiceListenerHooks()) {
-                try {
-                    hook.added(Collections.singleton(slreg.getListenerInfo()));
-                } catch (RuntimeException ex) {
-                    LOGGER.errorProcessingServiceListenerHook(ex, hook);
-                }
-            }
-
             // Add the listener to the list
             listeners.add(slreg);
         }
+
+        // The hooks are called without the monitor of the listeners: they may get services, register listeners or wait
+        // for other threads that do (static/06)
+        if (replaced != null)
+            callListenerHooks(Collections.singleton(replaced), true);
+
+        // The {@link ListenerHook} added method is called to provide the hook implementation with information on newly
+        // added service listeners.
+        // This method will be called as service listeners are added while this hook is registered
+        callListenerHooks(Collections.singleton(slreg.getListenerInfo()), false);
     }
 
     @Override
@@ -262,49 +261,95 @@ final class FrameworkEventsImpl implements FrameworkEvents {
     @Override
     public void removeServiceListener(final XBundle bundleState, final ServiceListener listener) {
         assert listener != null : "Null listener";
+        ListenerInfo removed;
         synchronized (serviceListeners) {
-            List<ServiceListenerRegistration> listeners = serviceListeners.get(bundleState);
-            if (listeners != null) {
-                ServiceListenerRegistration slreg = new ServiceListenerRegistration(bundleState, listener, NoFilter.INSTANCE);
-                int index = listeners.indexOf(slreg);
-                if (index >= 0) {
-                    slreg = listeners.remove(index);
-
-                    // The map must not keep the bundle when it has no listeners any more
-                    if (listeners.isEmpty())
-                        serviceListeners.remove(bundleState);
-
-                    // The {@link ListenerHook} 'removed' method is called to provide the hook implementation with information
-                    // on newly removed service listeners.
-                    // This method will be called as service listeners are removed while this hook is registered.
-                    for (ListenerHook hook : getServiceListenerHooks()) {
-                        try {
-                            ListenerInfo info = slreg.getListenerInfo();
-                            ((ListenerInfoImpl) info).setRemoved(true);
-                            hook.removed(Collections.singleton(info));
-                        } catch (RuntimeException ex) {
-                            LOGGER.errorProcessingServiceListenerHook(ex, hook);
-                        }
-                    }
-                }
-            }
+            removed = removeServiceListenerLocked(bundleState, listener);
         }
+
+        // The {@link ListenerHook} 'removed' method is called to provide the hook implementation with information
+        // on newly removed service listeners.
+        // This method will be called as service listeners are removed while this hook is registered.
+        if (removed != null)
+            callListenerHooks(Collections.singleton(removed), true);
+    }
+
+    // Remove the registration of the listener, the info of the removed one is returned
+    private ListenerInfo removeServiceListenerLocked(final XBundle bundleState, final ServiceListener listener) {
+        assert Thread.holdsLock(serviceListeners);
+        List<ServiceListenerRegistration> listeners = serviceListeners.get(bundleState);
+        if (listeners == null)
+            return null;
+        ServiceListenerRegistration slreg = new ServiceListenerRegistration(bundleState, listener, NoFilter.INSTANCE);
+        int index = listeners.indexOf(slreg);
+        if (index < 0)
+            return null;
+        slreg = listeners.remove(index);
+
+        // The map must not keep the bundle when it has no listeners any more
+        if (listeners.isEmpty())
+            serviceListeners.remove(bundleState);
+
+        ListenerInfo info = slreg.getListenerInfo();
+        ((ListenerInfoImpl) info).setRemoved(true);
+        return info;
     }
 
     @Override
     public void removeServiceListeners(final XBundle bundleState) {
+        Collection<ListenerInfo> listenerInfos;
         synchronized (serviceListeners) {
-            Collection<ListenerInfo> listenerInfos = getServiceListenerInfos(bundleState);
+            listenerInfos = getServiceListenerInfos(bundleState);
             serviceListeners.remove(bundleState);
+        }
+        if (listenerInfos.isEmpty())
+            return;
+        for (ListenerInfo info : listenerInfos)
+            ((ListenerInfoImpl) info).setRemoved(true);
 
-            // The {@link ListenerHook} 'removed' method is called to provide the hook implementation with information on newly
-            // removed service listeners.
-            // This method will be called as service listeners are removed while this hook is registered.
-            for (ListenerHook hook : getServiceListenerHooks()) {
+        // The {@link ListenerHook} 'removed' method is called to provide the hook implementation with information on newly
+        // removed service listeners.
+        // This method will be called as service listeners are removed while this hook is registered.
+        callListenerHooks(listenerInfos, true);
+    }
+
+    private void callListenerHooks(Collection<ListenerInfo> infos, boolean removed) {
+        assert Thread.holdsLock(serviceListeners) == false;
+        if (bundleManager.isFrameworkCreated() == false)
+            return;
+
+        SystemBundleState sysbundle = bundleManager.getSystemBundle();
+        BundleContext syscontext = sysbundle.getBundleContext();
+        if (syscontext == null)
+            return;
+        ServiceReference<?>[] srefs = null;
+        try {
+            srefs = syscontext.getServiceReferences(ListenerHook.class.getName(), null);
+        } catch (InvalidSyntaxException e) {
+            // ignore
+        } catch (IllegalStateException e) {
+            // the framework stopped
+        }
+        if (srefs == null)
+            return;
+
+        // Each hook is obtained for the call and released after it, in the order of the service ranking
+        Arrays.sort(srefs, Collections.reverseOrder());
+        for (ServiceReference<?> sref : srefs) {
+            ListenerHook hook = (ListenerHook) syscontext.getService(sref);
+            if (hook == null)
+                continue;
+            try {
+                if (removed)
+                    hook.removed(infos);
+                else
+                    hook.added(infos);
+            } catch (RuntimeException ex) {
+                LOGGER.errorProcessingServiceListenerHook(ex, hook);
+            } finally {
                 try {
-                    hook.removed(listenerInfos);
-                } catch (RuntimeException ex) {
-                    LOGGER.errorProcessingServiceListenerHook(ex, hook);
+                    syscontext.ungetService(sref);
+                } catch (IllegalStateException ex) {
+                    // the framework stopped
                 }
             }
         }
@@ -315,29 +360,6 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         synchronized (serviceListeners) {
             serviceListeners.clear();
         }
-    }
-
-    private List<ListenerHook> getServiceListenerHooks() {
-
-        if (bundleManager.isFrameworkCreated() == false)
-            return Collections.emptyList();
-
-        ServiceReference<?>[] srefs = null;
-        SystemBundleState sysbundle = bundleManager.getSystemBundle();
-        BundleContext syscontext = sysbundle.getBundleContext();
-        try {
-            srefs = syscontext.getServiceReferences(ListenerHook.class.getName(), null);
-        } catch (InvalidSyntaxException e) {
-            // ignore
-        }
-        if (srefs == null)
-            return Collections.emptyList();
-
-        List<ListenerHook> hooks = new ArrayList<ListenerHook>();
-        for (ServiceReference<?> sref : srefs)
-            hooks.add((ListenerHook) syscontext.getService(sref));
-
-        return Collections.unmodifiableList(hooks);
     }
 
     @Override

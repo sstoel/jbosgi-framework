@@ -167,6 +167,13 @@ public interface BundleManager extends Service<BundleManager> {
     void unregisterExecutorService(ExecutorService executorService);
 
     /**
+     * The services of the framework are about to stop, as when the server that runs them stops: no bundle is activated
+     * any more, a start level increase that is in progress is cut short. The framework is started again by its services.
+     */
+    default void frameworkServicesStopping() {
+    }
+
+    /**
      * Returns the framework properties merged with the System properties.
      *
      * @return The effective framework properties in a map

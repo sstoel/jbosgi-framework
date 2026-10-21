@@ -24,6 +24,7 @@ package org.jboss.osgi.framework.internal.log;
 import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 import org.osgi.framework.Bundle;
@@ -46,11 +47,22 @@ final class EventAdminSupport {
     private static final String EVENT = "org.osgi.service.event.Event";
     private static final String TOPIC_PREFIX = "org/osgi/service/log/LogEntry/";
 
+    /**
+     * Whether the framework posts the log entries: "true", "false" or "auto", the default. With "auto" they are not
+     * posted to an Event Admin that posts them itself, Apache Felix Event Admin has a log adapter of its own
+     */
+    static final String PROPERTY_LOG_EVENTS = "org.jboss.osgi.framework.log.events";
+    // The Event Admin implementations that post the log entries themselves
+    private static final String FELIX_EVENT_ADMIN = "org.apache.felix.eventadmin";
+
     private final BundleContext context;
+    private final String mode;
     private ServiceTracker<Object, Object> tracker;
 
     EventAdminSupport(BundleContext context) {
         this.context = context;
+        String value = context.getProperty(PROPERTY_LOG_EVENTS);
+        this.mode = value != null ? value.trim().toLowerCase(Locale.ROOT) : "auto";
     }
 
     synchronized void open() {
@@ -66,8 +78,15 @@ final class EventAdminSupport {
     }
 
     boolean isAvailable() {
+        if ("false".equals(mode))
+            return false;
         ServiceTracker<Object, Object> aux = tracker;
-        return aux != null && aux.getServiceReference() != null;
+        ServiceReference<Object> sref = aux != null ? aux.getServiceReference() : null;
+        if (sref == null)
+            return false;
+        // Every entry is posted once (services/10)
+        Bundle owner = sref.getBundle();
+        return "true".equals(mode) || owner == null || FELIX_EVENT_ADMIN.equals(owner.getSymbolicName()) == false;
     }
 
     /**
@@ -116,6 +135,10 @@ final class EventAdminSupport {
             props.put("bundle", bundle);
         }
         props.put("log.level", entry.getLevel());
+        // The level of the R7 Logger API as well, the topic follows the integer level like in Equinox: AUDIT and
+        // TRACE go to LOG_OTHER
+        if (entry.getLogLevel() != null)
+            props.put("log.loglevel", entry.getLogLevel());
         props.put("log.loggername", entry.getLoggerName());
         if (entry.getThreadInfo() != null)
             props.put("log.threadinfo", entry.getThreadInfo());

@@ -546,6 +546,15 @@ abstract class AbstractBundleState<R extends BundleStateRevision> extends Abstra
      */
     abstract int updateInternal(InputStream input) throws BundleException;
 
+    /**
+     * Update a bundle that may have been stopped for the update already
+     *
+     * @param originalState the state of the bundle before the update stopped it
+     */
+    int updateInternal(InputStream input, int originalState) throws BundleException {
+        return updateInternal(input);
+    }
+
     @Override
     public void uninstall() throws BundleException {
         assertNotUninstalled();

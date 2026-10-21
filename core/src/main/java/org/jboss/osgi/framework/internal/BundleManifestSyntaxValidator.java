@@ -226,6 +226,7 @@ final class BundleManifestSyntaxValidator {
         }
     }
 
+    // The metadata parser takes a single quote as a quote too, like split and indexOfUnquoted do (fuzz/10)
     private void assertQuotesTerminated(String header, String value) throws BundleException {
         char quote = 0;
         for (int i = 0; i < value.length(); i++) {
@@ -234,7 +235,7 @@ final class BundleManifestSyntaxValidator {
                 i++;
             else if (quote != 0)
                 quote = c == quote ? 0 : quote;
-            else if (c == '"')
+            else if (c == '"' || c == '\'')
                 quote = c;
         }
         if (quote != 0)

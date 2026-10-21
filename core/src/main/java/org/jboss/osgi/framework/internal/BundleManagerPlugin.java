@@ -52,6 +52,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.jboss.modules.ModuleIdentifier;
 import org.jboss.msc.service.ServiceBuilder;
@@ -175,7 +176,8 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     // The bundles that a refresh refreshes without the framework wiring lock, and their revisions when it began
     private final Set<XBundle> refreshingBundles = ConcurrentHashMap.newKeySet();
     private final Set<XBundleRevision> refreshingRevisions = ConcurrentHashMap.newKeySet();
-    private Thread stopThread;
+    // Set when the framework begins to stop, cleared when it is started again: no bundle is activated in between
+    private volatile boolean frameworkStopping;
     private final Map<String, Object> properties = new HashMap<String, Object>();
     private final AtomicInteger managerState = new AtomicInteger(Bundle.INSTALLED);
     private final AtomicBoolean managerStopped = new AtomicBoolean();
@@ -382,10 +384,24 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         return state;
     }
 
-        static Version getFrameworkVersion() {
+    /**
+     * The version of the framework, read once (services/14)
+     */
+    static Version getFrameworkVersion() {
+        return FrameworkVersionHolder.VERSION;
+    }
+
+    private static final class FrameworkVersionHolder {
+        static final Version VERSION = readFrameworkVersion();
+    }
+
+    private static Version readFrameworkVersion() {
         Version version;
         String versionSpec = BundleManagerPlugin.class.getPackage().getImplementationVersion();
-        // Without the Implementation-Version, e.g. in a jar that combines several jars, the Maven properties of the jar
+        // Without the Implementation-Version, e.g. in a jar that combines several jars or in the classes directory of a
+        // build, the version that the build wrote, else the Maven properties of the jar
+        if (versionSpec == null)
+            versionSpec = getBuildVersion();
         if (versionSpec == null)
             versionSpec = getMavenVersion();
         if (versionSpec == null)
@@ -396,13 +412,26 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             if (versionSpec.endsWith("-SNAPSHOT")) {
                 versionSpec = versionSpec.substring(0, versionSpec.length() - 9);
             }
-            version = Version.parseVersion(versionSpec);
+            try {
+                version = Version.parseVersion(versionSpec);
+            } catch (IllegalArgumentException ex2) {
+                return Version.emptyVersion;
+            }
         }
         return version;
     }
 
+    private static String getBuildVersion() {
+        String version = readVersionProperty(BundleManagerPlugin.class.getResourceAsStream("framework-version.properties"));
+        // An unfiltered copy of the file
+        return version != null && version.startsWith("${") == false ? version : null;
+    }
+
     private static String getMavenVersion() {
-        InputStream input = BundleManagerPlugin.class.getResourceAsStream("/META-INF/maven/org.jboss.osgi.framework/jbosgi-framework-core/pom.properties");
+        return readVersionProperty(BundleManagerPlugin.class.getResourceAsStream("/META-INF/maven/org.jboss.osgi.framework/jbosgi-framework-core/pom.properties"));
+    }
+
+    private static String readVersionProperty(InputStream input) {
         if (input == null)
             return null;
         try {
@@ -603,8 +632,57 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         }
     }
 
+    /**
+     * The key of the lock that serializes the installs and updates of a symbolic name
+     */
+    static String getNameLockKey(String symbolicName) {
+        return "bsn:" + symbolicName;
+    }
+
     private static final class InstallLock {
         int users;
+        // The lock of a symbolic name. A Java monitor serializes the installs of a location
+        final ReentrantLock nameLock = new ReentrantLock();
+    }
+
+    /**
+     * Take the lock of a symbolic name, from {@link #acquireInstallLock(String)} with the key of
+     * {@link #getNameLockKey(String)}. An install takes it before the framework wiring lock, which it needs to make the
+     * new revision known. An update holds the framework wiring lock already: it gives that up while it waits for an
+     * install of the name, and takes it again with the name lock held (concurrency/04).
+     */
+    void lockName(XBundle updatedBundle, Object installLock) throws BundleException {
+        ReentrantLock nameLock = ((InstallLock) installLock).nameLock;
+        if (updatedBundle == null) {
+            nameLock.lock();
+            return;
+        }
+        if (nameLock.tryLock())
+            return;
+        StateChangeLocks locks = stateChangeLocks.get();
+        LockManager lockManager = activeFrameworkState().getLockManager();
+        LockableItem wireLock = lockManager.getItemForType(FrameworkWiringLock.class);
+        if (locks == null || locks.bundle != updatedBundle || locks.context == null || locks.context.getItems().contains(wireLock) == false) {
+            nameLock.lock();
+            return;
+        }
+        // The bundle lock is kept, the wiring lock is given up while the update waits for the name
+        LockContext bundleOnly = lockManager.lockItems(locks.method, (LockableItem) updatedBundle);
+        lockManager.unlockItems(locks.context);
+        locks.context = bundleOnly;
+        nameLock.lock();
+        try {
+            LockContext again = lockForStateChange(lockManager, locks.method, wireLock, (LockableItem) updatedBundle);
+            lockManager.unlockItems(bundleOnly);
+            locks.context = again;
+        } catch (BundleException | RuntimeException ex) {
+            nameLock.unlock();
+            throw ex;
+        }
+    }
+
+    void unlockName(Object installLock) {
+        ((InstallLock) installLock).nameLock.unlock();
     }
 
     @Override
@@ -620,13 +698,16 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         // The installs of a symbolic name are serialized: the uniqueness check and the creation of the bundle are one
         // step, two concurrent installs of the same name and version cannot both pass the check
         String symbolicName = deployment.getSymbolicName();
-        String nameKey = "bsn:" + symbolicName;
+        String nameKey = getNameLockKey(symbolicName);
         Object nameLock = symbolicName != null && isUpdateOrRefresh(deployment) == false ? acquireInstallLock(nameKey) : null;
         try {
             if (nameLock == null)
                 return installBundleRevisionInternal(context, deployment, serviceTarget);
-            synchronized (nameLock) {
+            lockName(null, nameLock);
+            try {
                 return installBundleRevisionInternal(context, deployment, serviceTarget);
+            } finally {
+                unlockName(nameLock);
             }
         } finally {
             if (nameLock != null)
@@ -785,6 +866,8 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         LockManager lockManager = activeFrameworkState().getLockManager();
         LockableItem[] items = getLockableItems(lockManager, Method.START, bundle);
         LockContext lockContext = lockForStateChange(lockManager, Method.START, items);
+        StateChangeLocks locks = new StateChangeLocks(Method.START, bundle, lockContext, stateChangeLocks.get());
+        stateChangeLocks.set(locks);
         boolean started = false;
         try {
             AbstractBundleState.assertBundleState(bundle).startInternal(options);
@@ -793,12 +876,73 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             LOGGER.debugf(ex, "Cannot start bundle: %s", bundle);
             throw ex;
         } finally {
-            lockManager.unlockItems(lockContext);
+            locks.pop(stateChangeLocks);
+            lockManager.unlockItems(locks.context);
             // The STARTED and LAZY_ACTIVATION events are delivered after the state change lock is released
             Integer deferred = UserBundleState.takeDeferredStartEvent(bundle);
             if (started && deferred != null)
                 getFrameworkState().getFrameworkEvents().fireBundleEvent(bundle, deferred);
         }
+    }
+
+    /**
+     * The framework wiring lock that the start of an unresolved bundle took for the resolve is given up before the
+     * activator of the bundle is called: the bundle lock is kept. An activator that waits for another thread which
+     * resolves or installs bundles does not block that thread (concurrency/05).
+     */
+    void releaseWiringLockBeforeActivation(XBundle bundle) {
+        StateChangeLocks locks = stateChangeLocks.get();
+        if (locks == null || locks.bundle != bundle || locks.method != Method.START || locks.context == null)
+            return;
+        LockManager lockManager = activeFrameworkState().getLockManager();
+        LockableItem wireLock = lockManager.getItemForType(FrameworkWiringLock.class);
+        if (locks.context.getItems().contains(wireLock) == false)
+            return;
+        // This thread holds the bundle lock: it is taken again right away, before the context with the wiring lock is
+        // released. No lock is waited for while another one is held
+        LockContext bundleOnly = lockManager.lockItems(Method.START, (LockableItem) bundle);
+        lockManager.unlockItems(locks.context);
+        locks.context = bundleOnly;
+    }
+
+    // The locks of a start or update on the current thread, a start in an activator is nested
+    private final ThreadLocal<StateChangeLocks> stateChangeLocks = new ThreadLocal<StateChangeLocks>();
+
+    private static final class StateChangeLocks {
+        final Method method;
+        final XBundle bundle;
+        final StateChangeLocks outer;
+        LockContext context;
+
+        StateChangeLocks(Method method, XBundle bundle, LockContext context, StateChangeLocks outer) {
+            this.method = method;
+            this.bundle = bundle;
+            this.context = context;
+            this.outer = outer;
+        }
+
+        void pop(ThreadLocal<StateChangeLocks> current) {
+            if (outer != null)
+                current.set(outer);
+            else
+                current.remove();
+        }
+    }
+
+    /**
+     * Stop an active bundle before an update or uninstall takes its locks: its activator is not called under the
+     * framework wiring lock (concurrency/05). A bundle that is started again in the meantime is stopped by the update or
+     * uninstall itself.
+     *
+     * @return the state of the bundle before it was stopped
+     */
+    private int stopBeforeStateChange(XBundle bundle, int options) throws BundleException {
+        int state = bundle.getState();
+        if (bundle instanceof UserBundleState == false || bundle.isFragment())
+            return state;
+        if (state == Bundle.ACTIVE || state == Bundle.STARTING || state == Bundle.STOPPING)
+            stopBundle(bundle, options);
+        return state;
     }
 
     void stopBundleLifecycle(XBundle bundle, int options) throws BundleException {
@@ -825,16 +969,21 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     @Override
     public void updateBundle(XBundle bundle, InputStream input) throws BundleException {
         LockManager lockManager = activeFrameworkState().getLockManager();
+        // If Bundle.stop throws an exception, the exception is rethrown terminating the update
+        int originalState = stopBeforeStateChange(bundle, Bundle.STOP_TRANSIENT);
         LockableItem[] items = getLockableItems(lockManager, Method.UPDATE, bundle);
         LockContext lockContext = lockForStateChange(lockManager, Method.UPDATE, items);
+        StateChangeLocks locks = new StateChangeLocks(Method.UPDATE, bundle, lockContext, stateChangeLocks.get());
+        stateChangeLocks.set(locks);
         int restartOptions;
         try {
-            restartOptions = AbstractBundleState.assertBundleState(bundle).updateInternal(input);
+            restartOptions = AbstractBundleState.assertBundleState(bundle).updateInternal(input, originalState);
         } catch (BundleException ex) {
             LOGGER.debugf(ex, "Cannot update bundle: %s", bundle);
             throw ex;
         } finally {
-            lockManager.unlockItems(lockContext);
+            locks.pop(stateChangeLocks);
+            lockManager.unlockItems(locks.context);
         }
 
         // The updated bundle is started like with Bundle.start, without the locks of the update: the bundle lifecycle
@@ -867,6 +1016,18 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     @Override
     public void uninstallBundle(XBundle bundle, int options) throws BundleException {
         LockManager lockManager = activeFrameworkState().getLockManager();
+
+        // If Bundle.stop throws an exception, a Framework event of type FrameworkEvent.ERROR is fired. A bundle whose
+        // activation or deactivation does not complete in time is not uninstalled (STATECHANGE_ERROR)
+        try {
+            stopBeforeStateChange(bundle, options);
+        } catch (BundleException ex) {
+            if (ex.getType() == BundleException.STATECHANGE_ERROR && ex.getCause() instanceof LockException)
+                throw ex;
+            fireFrameworkError(bundle, "stopping bundle: " + bundle, ex);
+        } catch (RuntimeException ex) {
+            fireFrameworkError(bundle, "stopping bundle: " + bundle, ex);
+        }
 
         LockableItem[] items = getLockableItems(lockManager, Method.UNINSTALL, bundle);
         LockContext lockContext = lockForStateChange(lockManager, Method.UNINSTALL, items);
@@ -1191,29 +1352,21 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     /**
      * Stop the framework on another thread and return immediately, as Framework.stop and update do. The given task
-     * runs on that thread after the stop, a stop that is already in progress is not started again.
+     * runs on that thread after the stop. The framework is STOPPING when this returns: a stop that is already in
+     * progress, also one for an update, is not started again.
      */
     void stopFramework(final int stoppedEventType, final Runnable afterStop) {
-        int state = getManagerState();
-        if (state != Bundle.STARTING && state != Bundle.ACTIVE)
+        if (beginShutdown() == false)
             return;
-        synchronized (this) {
-            if (stopThread != null && stopThread.isAlive())
-                return;
-            stopThread = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    shutdownManager(stoppedEventType);
-                    if (afterStop != null)
-                        afterStop.run();
-                }
-            }, "Framework stop thread");
-            stopThread.start();
-        }
-    }
-
-    void shutdownManager(boolean stopForUpdate) {
-        shutdownManager(stopForUpdate ? FrameworkEvent.STOPPED_UPDATE : FrameworkEvent.STOPPED);
+        Thread stopThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                completeShutdown(stoppedEventType);
+                if (afterStop != null)
+                    afterStop.run();
+            }
+        }, "Framework stop thread");
+        stopThread.start();
     }
 
     /**
@@ -1222,17 +1375,41 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
      * @param stoppedEventType The type of the event that tells why the framework stopped
      */
     void shutdownManager(int stoppedEventType) {
+        if (beginShutdown())
+            completeShutdown(stoppedEventType);
+    }
 
-        // If the Framework is not STARTING and not ACTIVE there is nothing to do
-        int state = getManagerState();
-        if (state != Bundle.STARTING && state != Bundle.ACTIVE)
-            return;
+    /**
+     * Move the framework from STARTING or ACTIVE to STOPPING. Only the thread that did it stops the framework with
+     * {@link #completeShutdown(int)}: a stop, an update and the relaunch of a refresh do not stop it twice.
+     *
+     * @return false if the framework is not STARTING or ACTIVE, there is nothing to do
+     */
+    boolean beginShutdown() {
+        while (true) {
+            int state = managerState.get();
+            if (state != Bundle.STARTING && state != Bundle.ACTIVE)
+                return false;
+            if (managerState.compareAndSet(state, Bundle.STOPPING))
+                break;
+        }
+        // No bundle is activated any more, until the framework is started again
+        frameworkStopping = true;
+        synchronized (managerState) {
+            managerState.notifyAll();
+        }
+        return true;
+    }
+
+    /**
+     * Stop the framework that {@link #beginShutdown()} moved to STOPPING
+     */
+    void completeShutdown(int stoppedEventType) {
 
         LOGGER.debugf("Stop framework");
 
         stoppedEvent = stoppedEventType;
         getSystemBundle().changeState(Bundle.STOPPING);
-        setManagerState(Bundle.STOPPING);
 
         stopBundlesAndActivators();
 
@@ -1257,6 +1434,7 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         shutdownContainer.awaitShutdown(30, TimeUnit.SECONDS);
         if (frameworkBuilder instanceof FrameworkBuilderImpl)
             ((FrameworkBuilderImpl) frameworkBuilder).releaseIntegrationServices();
+        frameworkExtensions.release();
         setManagerState(Bundle.RESOLVED);
     }
 
@@ -1294,21 +1472,33 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     }
 
     /**
-     * The framework services are stopped without {@link #shutdownManager(int)}, as the server does on a stop or a
-     * reload: the bundles are stopped like on a shutdown of the framework (start level 0), their persistent state is
-     * kept. The executors end with the services that own them.
-     */
-    /**
      * True if the framework is on its way to start level 0: it stops through the system bundle, or the server stops its
      * services. No bundle is activated any more.
      */
     boolean isFrameworkStopping() {
-        if (getManagerState() == Bundle.STOPPING)
+        if (frameworkStopping || getManagerState() == Bundle.STOPPING)
             return true;
         SystemBundleState systemBundle = getSystemBundle();
         return systemBundle != null && systemBundle.getState() == Bundle.STOPPING;
     }
 
+    /**
+     * The framework is started again: bundles are activated again
+     */
+    void frameworkStarted() {
+        frameworkStopping = false;
+    }
+
+    @Override
+    public void frameworkServicesStopping() {
+        frameworkStopping = true;
+    }
+
+    /**
+     * The framework services are stopped without {@link #shutdownManager(int)}, as the server does on a stop or a
+     * reload: the bundles are stopped like on a shutdown of the framework (start level 0), their persistent state is
+     * kept. The executors end with the services that own them.
+     */
     void stopFrameworkServices() {
         // A framework that is stopping or stopped through the system bundle has stopped its bundles
         int state = getManagerState();
@@ -1320,6 +1510,9 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             return;
 
         LOGGER.debugf("Stop framework services");
+        // The flag stays set when the system bundle is RESOLVED again: a start level raise that is still queued does
+        // not start bundles
+        frameworkStopping = true;
         systemBundle.changeState(Bundle.STOPPING);
         stopBundlesAndActivators();
         systemBundle.changeState(Bundle.RESOLVED);

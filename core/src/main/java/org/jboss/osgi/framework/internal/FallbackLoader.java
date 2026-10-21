@@ -494,39 +494,106 @@ final class FallbackLoader implements LocalLoader {
     }
 
     /**
-     * A candidate is consistent with the class space of the host when every package that it uses, and that the host
-     * sees, comes from the same provider for both (uses constraint, 3.7.6)
+     * A candidate is consistent with the class space of the host when every package that it uses, directly or through
+     * the uses of the packages it uses, and that the host sees comes from the same provider for both (uses constraint,
+     * 3.7.6). The host sees packages through its import wires, its own exports and its required bundles (resolver/04).
      */
     private boolean isUsesConsistent(XPackageCapability cap) {
-        String uses = cap.getDirective(Constants.USES_DIRECTIVE);
-        if (uses == null)
-            return true;
-        XBundleRevision exporter = (XBundleRevision) cap.getResource();
-        for (String usedPackage : uses.split(",")) {
-            usedPackage = usedPackage.trim();
-            BundleRevision hostSource = getPackageSource(hostRev, usedPackage);
-            BundleRevision exporterSource = getPackageSource(exporter, usedPackage);
-            if (hostSource != null && exporterSource != null && hostSource != exporterSource)
+        Map<String, BundleRevision> implied = new HashMap<String, BundleRevision>();
+        if (collectImpliedPackages(cap, implied, new HashSet<XPackageCapability>()) == false)
+            return false;
+        for (Map.Entry<String, BundleRevision> entry : implied.entrySet()) {
+            Set<BundleRevision> hostSources = getPackageSources(hostRev, entry.getKey());
+            if (hostSources.isEmpty() == false && hostSources.contains(entry.getValue()) == false)
                 return false;
         }
         return true;
     }
 
-    // The revision that provides a package to the given revision: an import wire, else the revision itself if it exports it
-    private BundleRevision getPackageSource(BundleRevision brev, String packageName) {
+    /**
+     * Add the packages that the uses directive of the capability implies, with the revisions that provide them, also
+     * those of the used packages in turn
+     *
+     * @return false if the capability implies two providers of one package
+     */
+    private boolean collectImpliedPackages(XPackageCapability cap, Map<String, BundleRevision> implied, Set<XPackageCapability> visited) {
+        if (visited.add(cap) == false)
+            return true;
+        String uses = cap.getDirective(Constants.USES_DIRECTIVE);
+        if (uses == null)
+            return true;
+        BundleRevision exporter = (BundleRevision) cap.getResource();
+        for (String usedPackage : uses.split(",")) {
+            usedPackage = usedPackage.trim();
+            if (usedPackage.isEmpty())
+                continue;
+            for (XPackageCapability usedCap : getPackageSourceCapabilities(exporter, usedPackage)) {
+                BundleRevision source = (BundleRevision) usedCap.getResource();
+                BundleRevision previous = implied.put(usedPackage, source);
+                if (previous != null && previous != source)
+                    return false;
+                if (collectImpliedPackages(usedCap, implied, visited) == false)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    // The revisions that provide a package to the given revision
+    private Set<BundleRevision> getPackageSources(BundleRevision brev, String packageName) {
+        Set<BundleRevision> result = new HashSet<BundleRevision>();
+        for (XPackageCapability pcap : getPackageSourceCapabilities(brev, packageName))
+            result.add((BundleRevision) pcap.getResource());
+        return result;
+    }
+
+    /**
+     * The capabilities that provide a package to the given revision: an import wire, else its own export, else the
+     * exports of its required bundles, also those that they re-export (3.13.3, a split package has more than one)
+     */
+    private List<XPackageCapability> getPackageSourceCapabilities(BundleRevision brev, String packageName) {
         BundleWiring wiring = brev.getWiring();
         if (wiring != null) {
             List<BundleWire> wires = wiring.getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE);
             for (BundleWire wire : wires != null ? wires : Collections.<BundleWire>emptyList()) {
-                if (packageName.equals(wire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE)))
-                    return wire.getProvider();
+                if (packageName.equals(wire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE))) {
+                    XPackageCapability pcap = ((XCapability) wire.getCapability()).adapt(XPackageCapability.class);
+                    return pcap != null ? Collections.singletonList(pcap) : Collections.<XPackageCapability>emptyList();
+                }
             }
         }
+        List<XPackageCapability> result = new ArrayList<XPackageCapability>();
+        if (wiring != null)
+            addRequiredBundleCapabilities(wiring, packageName, result, new HashSet<BundleWiring>(), true);
         for (XPackageCapability pcap : getPackageCapabilities(brev)) {
-            if (packageName.equals(pcap.getPackageName()))
-                return brev;
+            if (packageName.equals(pcap.getPackageName())) {
+                result.add(pcap);
+                break;
+            }
         }
-        return null;
+        return result;
+    }
+
+    private void addRequiredBundleCapabilities(BundleWiring wiring, String packageName, List<XPackageCapability> result, Set<BundleWiring> visited, boolean requirer) {
+        if (visited.add(wiring) == false)
+            return;
+        List<BundleWire> wires = wiring.getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE);
+        if (wires == null)
+            return;
+        for (BundleWire wire : wires) {
+            XIdentityRequirement idreq = ((XRequirement) wire.getRequirement()).adapt(XIdentityRequirement.class);
+            boolean reexport = idreq != null && Constants.VISIBILITY_REEXPORT.equals(idreq.getVisibility());
+            if (requirer || reexport) {
+                BundleWiring providerWiring = wire.getProviderWiring();
+                if (providerWiring != null) {
+                    addRequiredBundleCapabilities(providerWiring, packageName, result, visited, false);
+                    for (XPackageCapability pcap : getPackageCapabilities(wire.getProvider())) {
+                        if (packageName.equals(pcap.getPackageName()))
+                            result.add(pcap);
+                    }
+                }
+            }
+        }
     }
 
     private void findInUnresolvedRevisions(DynamicLoadContext context, List<XPackageRequirement> matchingPatterns) {

@@ -101,6 +101,11 @@ final class HostBundleRevision extends UserBundleRevision {
         attachedFragments.add(fragRev);
     }
 
+    void detachFragment(FragmentBundleRevision fragRev) {
+        if (attachedFragments != null)
+            attachedFragments.remove(fragRev);
+    }
+
     Set<FragmentBundleRevision> getAttachedFragments() {
         if (attachedFragments == null)
             return Collections.emptySet();
@@ -143,7 +148,8 @@ final class HostBundleRevision extends UserBundleRevision {
         List<BundleRequirement> result = new ArrayList<BundleRequirement>();
         for (Requirement req : super.getRequirements(namespace))
             result.add((BundleRequirement) req);
-        return result;
+        // The list cannot be modified, like the lists of the other revisions (services/15)
+        return Collections.unmodifiableList(result);
     }
 
     @Override

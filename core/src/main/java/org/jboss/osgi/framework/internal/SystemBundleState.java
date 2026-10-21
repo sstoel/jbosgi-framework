@@ -21,8 +21,10 @@
  */
 package org.jboss.osgi.framework.internal;
 
+import static org.jboss.osgi.framework.FrameworkLogger.LOGGER;
 import static org.jboss.osgi.framework.FrameworkMessages.MESSAGES;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collections;
 import java.util.List;
@@ -34,6 +36,7 @@ import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleException;
 import org.osgi.framework.FrameworkEvent;
 import org.osgi.framework.Version;
+import org.osgi.framework.launch.Framework;
 import org.osgi.framework.wiring.BundleRevision;
 import org.osgi.framework.wiring.BundleRevisions;
 
@@ -150,7 +153,21 @@ final class SystemBundleState extends AbstractBundleState<SystemBundleRevision> 
 
     @Override
     int updateInternal(InputStream input) throws BundleException {
-        // [TODO] Returns immediately, then stops and restarts the Framework on another thread.
+        // The system bundle has no content to update: the stream is closed
+        if (input != null) {
+            try {
+                input.close();
+            } catch (IOException ex) {
+                // ignore
+            }
+        }
+        // Returns immediately, then stops and restarts the Framework on another thread, as Framework.update does
+        // (connect/08). A framework that runs in the services of a server has no Framework object, the server restarts it
+        Framework framework = getBundleManager().getFramework();
+        if (framework != null)
+            framework.update();
+        else
+            LOGGER.warnf("The framework is not restarted by an update of the system bundle, it runs in the services of a server");
         return -1;
     }
 
