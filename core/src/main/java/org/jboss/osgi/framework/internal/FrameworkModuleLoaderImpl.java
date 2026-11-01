@@ -35,11 +35,14 @@ import java.util.function.Consumer;
 
 import org.jboss.modules.DependencySpec;
 import org.jboss.modules.ModuleDependencySpec;
+import org.jboss.modules.ModuleDependencySpecBuilder;
 import org.jboss.modules.Module;
 import org.jboss.modules.ModuleIdentifier;
 import org.jboss.modules.ModuleLoadException;
 import org.jboss.modules.ModuleLoader;
 import org.jboss.modules.ModuleSpec;
+import org.jboss.modules.filter.PathFilter;
+import org.jboss.modules.filter.PathFilters;
 import org.jboss.msc.service.Service;
 import org.jboss.msc.service.ServiceBuilder;
 import org.jboss.msc.service.ServiceController;
@@ -68,6 +71,9 @@ import org.osgi.framework.wiring.BundleWire;
  */
 public final class FrameworkModuleLoaderImpl extends ModuleLoader implements FrameworkModuleLoader {
 
+    // One instance, so that a java.base dependency that was already replaced is recognized
+    private static final PathFilter JDK_INTERNAL_REFLECT_FILTER = PathFilters.is("jdk/internal/reflect");
+
     private final Map<ModuleIdentifier, ModuleHolder> moduleSpecs = new ConcurrentHashMap<ModuleIdentifier, ModuleHolder>();
     private final ServiceRegistry serviceRegistry;
     private final boolean strictBootDelegation;
@@ -79,18 +85,43 @@ public final class FrameworkModuleLoaderImpl extends ModuleLoader implements Fra
     /**
      * @param strictBootDelegation If true, bundle modules do not get the dependency on the java.base module that
      *        every module has by default. Packages like javax.net are then only visible when they are imported
-     *        or configured for boot delegation.
+     *        or configured for boot delegation. Only jdk.internal.reflect stays visible, see
+     *        {@link #removeBaseDependency(Module)}.
      */
     public FrameworkModuleLoaderImpl(ServiceRegistry serviceRegistry, boolean strictBootDelegation) {
         this.serviceRegistry = serviceRegistry;
         this.strictBootDelegation = strictBootDelegation;
     }
 
+    /**
+     * Replaces the java.base dependency of a bundle module with one that only imports the classes of
+     * jdk.internal.reflect.
+     *
+     * The serialization of JDK 21 defines a generated constructor accessor, a subclass of
+     * jdk.internal.reflect.SerializationConstructorAccessorImpl, in a class loader whose parent is the class loader of
+     * the serialized class. For a class of a bundle the superclass has to be visible through the bundle module,
+     * otherwise the serialization fails with NoClassDefFoundError jdk/internal/reflect/SerializationConstructorAccessorImpl.
+     * Felix and Equinox delegate that package implicitly as well. java.base does not export it, so a bundle cannot
+     * use its classes.
+     *
+     * A module can come here more than once; a dependency that was replaced before is kept as it is.
+     */
     private void removeBaseDependency(Module module) throws ModuleLoadException {
         List<DependencySpec> dependencies = new ArrayList<DependencySpec>();
         boolean removed = false;
         for (DependencySpec dependency : getDependencies(module)) {
-            if (dependency instanceof ModuleDependencySpec && "java.base".equals(((ModuleDependencySpec) dependency).getName())) {
+            if (dependency instanceof ModuleDependencySpec && "java.base".equals(((ModuleDependencySpec) dependency).getName())
+                    && dependency.getImportFilter() != JDK_INTERNAL_REFLECT_FILTER) {
+                ModuleDependencySpec base = (ModuleDependencySpec) dependency;
+                dependencies.add(new ModuleDependencySpecBuilder()
+                        .setModuleLoader(base.getModuleLoader())
+                        .setName(base.getName())
+                        .setOptional(base.isOptional())
+                        .setImportFilter(JDK_INTERNAL_REFLECT_FILTER)
+                        .setExportFilter(PathFilters.rejectAll())
+                        .setResourceImportFilter(PathFilters.rejectAll())
+                        .setResourceExportFilter(PathFilters.rejectAll())
+                        .build());
                 removed = true;
             } else {
                 dependencies.add(dependency);
