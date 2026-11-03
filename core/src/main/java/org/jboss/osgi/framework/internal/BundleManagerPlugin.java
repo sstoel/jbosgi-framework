@@ -176,6 +176,8 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     // The bundles that a refresh refreshes without the framework wiring lock, and their revisions when it began
     private final Set<XBundle> refreshingBundles = ConcurrentHashMap.newKeySet();
     private final Set<XBundleRevision> refreshingRevisions = ConcurrentHashMap.newKeySet();
+    // The bundles that an update updates, with the revision that they had when it began
+    private final Map<XBundle, XBundleRevision> updatingBundles = new ConcurrentHashMap<XBundle, XBundleRevision>();
     // Set when the framework begins to stop, cleared when it is started again: no bundle is activated in between
     private volatile boolean frameworkStopping;
     private final Map<String, Object> properties = new HashMap<String, Object>();
@@ -458,6 +460,16 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         }
     }
 
+    boolean compareAndSetManagerState(int expected, int state) {
+        boolean changed = managerState.compareAndSet(expected, state);
+        if (changed) {
+            synchronized (managerState) {
+                managerState.notifyAll();
+            }
+        }
+        return changed;
+    }
+
     /**
      * Whether the framework was launched through its {@link Framework} object, which can be stopped for the launcher to
      * launch it again. An integration that creates the framework services itself (like WildFly) does not use it.
@@ -560,12 +572,29 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         return Collections.unmodifiableSet(result);
     }
 
+    /**
+     * The bundle with the given id, also an uninstalled bundle whose revisions are still in use. The environment knows
+     * the revisions by their resource id. Only the first revision of a bundle has the bundle id as its resource id, a
+     * revision of an update has an id of its own: when the first revision is removed, after an update or a refresh, the
+     * bundle is found through its other revisions (S1 of the release check).
+     */
     @Override
     public XBundle getBundleById(long bundleId) {
         XEnvironment env = injectedEnvironment.getValue();
         XResource res = env.getResourceById(bundleId);
         if (res instanceof XBundleRevision) {
-            return ((XBundleRevision) res).getBundle();
+            XBundle bundle = ((XBundleRevision) res).getBundle();
+            if (bundle.getBundleId() == bundleId)
+                return bundle;
+        }
+        Iterator<XResource> itres = env.getResources(null);
+        while (itres.hasNext()) {
+            XResource aux = itres.next();
+            if (aux instanceof XBundleRevision) {
+                XBundle bundle = ((XBundleRevision) aux).getBundle();
+                if (bundle.getBundleId() == bundleId)
+                    return bundle;
+            }
         }
         return null;
     }
@@ -648,38 +677,28 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
     /**
      * Take the lock of a symbolic name, from {@link #acquireInstallLock(String)} with the key of
      * {@link #getNameLockKey(String)}. An install takes it before the framework wiring lock, which it needs to make the
-     * new revision known. An update holds the framework wiring lock already: it gives that up while it waits for an
-     * install of the name, and takes it again with the name lock held (concurrency/04).
+     * new revision known. An update takes it with the lock of its bundle, without the framework wiring lock
+     * (concurrency/04). The wait is bounded like the waits for the other locks of the framework: in the server the
+     * holder may wait for a management operation, whose deployment waits for the name (FW-05 of the release check).
      */
     void lockName(XBundle updatedBundle, Object installLock) throws BundleException {
         ReentrantLock nameLock = ((InstallLock) installLock).nameLock;
-        if (updatedBundle == null) {
-            nameLock.lock();
-            return;
-        }
-        if (nameLock.tryLock())
-            return;
-        StateChangeLocks locks = stateChangeLocks.get();
-        LockManager lockManager = activeFrameworkState().getLockManager();
-        LockableItem wireLock = lockManager.getItemForType(FrameworkWiringLock.class);
-        if (locks == null || locks.bundle != updatedBundle || locks.context == null || locks.context.getItems().contains(wireLock) == false) {
-            nameLock.lock();
-            return;
-        }
-        // The bundle lock is kept, the wiring lock is given up while the update waits for the name
-        LockContext bundleOnly = lockManager.lockItems(locks.method, (LockableItem) updatedBundle);
-        lockManager.unlockItems(locks.context);
-        locks.context = bundleOnly;
-        nameLock.lock();
+        boolean locked;
         try {
-            LockContext again = lockForStateChange(lockManager, locks.method, wireLock, (LockableItem) updatedBundle);
-            lockManager.unlockItems(bundleOnly);
-            locks.context = again;
-        } catch (BundleException | RuntimeException ex) {
-            nameLock.unlock();
-            throw ex;
+            locked = nameLock.tryLock(NAME_LOCK_TIMEOUT, TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            locked = false;
+        }
+        if (locked == false) {
+            String message = "Cannot " + (updatedBundle != null ? "update " + updatedBundle : "install a bundle")
+                    + ": another install or update of the symbolic name did not complete in " + NAME_LOCK_TIMEOUT + " s";
+            throw new BundleException(message, BundleException.STATECHANGE_ERROR);
         }
     }
+
+    // The time that an install or update waits for another install or update of the symbolic name, in seconds
+    private static final long NAME_LOCK_TIMEOUT = 30;
 
     void unlockName(Object installLock) {
         ((InstallLock) installLock).nameLock.unlock();
@@ -694,6 +713,18 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
         if (serviceTarget == null)
             serviceTarget = getServiceTarget();
+
+        // The install of a location that is installed returns its bundle, it checks no name. It does not wait for the
+        // name either: in the server the update of the bundle holds it while its deployment is replaced, and when the
+        // deployment of the new revision fails the server deploys the bundle's deployment again (T6 of the release check)
+        if (isUpdateOrRefresh(deployment) == false) {
+            XBundle bundle = getBundleByLocation(deployment.getLocation());
+            if (bundle != null) {
+                LOGGER.debugf("Installing an already existing bundle: %s", deployment);
+                VFSUtils.safeClose(deployment.getRoot());
+                return bundle.getBundleRevision();
+            }
+        }
 
         // The installs of a symbolic name are serialized: the uniqueness check and the creation of the bundle are one
         // step, two concurrent installs of the same name and version cannot both pass the check
@@ -971,17 +1002,33 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
         LockManager lockManager = activeFrameworkState().getLockManager();
         // If Bundle.stop throws an exception, the exception is rethrown terminating the update
         int originalState = stopBeforeStateChange(bundle, Bundle.STOP_TRANSIENT);
-        LockableItem[] items = getLockableItems(lockManager, Method.UPDATE, bundle);
-        LockContext lockContext = lockForStateChange(lockManager, Method.UPDATE, items);
+        // The update takes the lock of its bundle. It takes the framework wiring lock only for the change of the wiring,
+        // when the new revision exists (lockWiringForUpdate): in the server the bundle lifecycle creates the revision in a
+        // management operation, which waits for the operations whose deployments wait for the wiring lock (S3 of the
+        // release check). Until the update is done the new revision is hidden from the resolves of other bundles
+        LockContext lockContext;
+        try {
+            lockContext = lockForStateChange(lockManager, Method.UPDATE, (LockableItem) bundle);
+        } catch (BundleException ex) {
+            // The update did not happen: a bundle that was stopped for it is started again (FW-06 of the release check)
+            restartAfterFailedUpdate(bundle, originalState);
+            throw ex;
+        }
         StateChangeLocks locks = new StateChangeLocks(Method.UPDATE, bundle, lockContext, stateChangeLocks.get());
         stateChangeLocks.set(locks);
+        boolean hidden = bundle instanceof UserBundleState && updatingBundles.putIfAbsent(bundle, bundle.getBundleRevision()) == null;
         int restartOptions;
         try {
+            // An uninstall that took the lock of the bundle first is not undone (FW-11 of the release check)
+            if (bundle.getState() == Bundle.UNINSTALLED)
+                throw MESSAGES.illegalStateBundleAlreadyUninstalled(bundle);
             restartOptions = AbstractBundleState.assertBundleState(bundle).updateInternal(input, originalState);
         } catch (BundleException ex) {
             LOGGER.debugf(ex, "Cannot update bundle: %s", bundle);
             throw ex;
         } finally {
+            if (hidden)
+                updatingBundles.remove(bundle);
             locks.pop(stateChangeLocks);
             lockManager.unlockItems(locks.context);
         }
@@ -995,6 +1042,44 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
             } catch (BundleException ex) {
                 getFrameworkState().getFrameworkEvents().fireFrameworkEvent(bundle, FrameworkEvent.ERROR, ex);
             }
+        }
+    }
+
+    private void restartAfterFailedUpdate(XBundle bundle, int originalState) {
+        if (bundle instanceof UserBundleState == false || (originalState != Bundle.ACTIVE && originalState != Bundle.STARTING))
+            return;
+        try {
+            startBundleLifecycle(bundle, ((UserBundleState) bundle).getRestartOptions());
+        } catch (BundleException ex) {
+            getFrameworkState().getFrameworkEvents().fireFrameworkEvent(bundle, FrameworkEvent.ERROR, ex);
+        }
+    }
+
+    /**
+     * The update has the lock of its bundle while the bundle lifecycle creates the new revision. It takes the framework
+     * wiring lock with it for the change of the wiring. A wiring lock that cannot be obtained in time does not fail the
+     * update, whose revision exists: the revision that the bundle had stays then until the next refresh.
+     *
+     * @return false if the update has no framework wiring lock
+     */
+    boolean lockWiringForUpdate(XBundle bundle) {
+        StateChangeLocks locks = stateChangeLocks.get();
+        if (locks == null || locks.bundle != bundle || locks.method != Method.UPDATE)
+            return false;
+        LockManager lockManager = activeFrameworkState().getLockManager();
+        LockableItem wireLock = lockManager.getItemForType(FrameworkWiringLock.class);
+        if (locks.context != null && locks.context.getItems().contains(wireLock))
+            return true;
+        try {
+            // This thread holds the bundle lock, it is taken with the wiring lock again before the context of the bundle
+            // lock is released
+            LockContext withWiring = lockManager.lockItems(Method.UPDATE, wireLock, (LockableItem) bundle);
+            lockManager.unlockItems(locks.context);
+            locks.context = withWiring;
+            return withWiring != null;
+        } catch (LockException ex) {
+            LOGGER.warnf(ex, "The update of %s cannot obtain the framework wiring lock, the revision that it replaces is removed with the next refresh", bundle);
+            return false;
         }
     }
 
@@ -1179,9 +1264,17 @@ final class BundleManagerPlugin extends AbstractIntegrationService<BundleManager
 
     /**
      * A revision that a refresh refreshes without the framework wiring lock is no provider for a requirer that the
-     * refresh does not refresh
+     * refresh does not refresh. The new revision of a bundle that is updated is none either, nor is it resolved with
+     * other bundles, until the update made it the revision of an INSTALLED bundle.
      */
     boolean isHiddenByRefresh(Resource provider, Resource requirer) {
+        if (updatingBundles.isEmpty() == false && provider instanceof XBundleRevision) {
+            XBundle bundle = ((XBundleRevision) provider).getBundle();
+            XBundleRevision origin = bundle != null ? updatingBundles.get(bundle) : null;
+            boolean ownRequirement = requirer instanceof XBundleRevision && ((XBundleRevision) requirer).getBundle() == bundle;
+            if (origin != null && origin != provider && ownRequirement == false)
+                return true;
+        }
         if (refreshingRevisions.isEmpty() || refreshingRevisions.contains(provider) == false)
             return false;
         return (requirer instanceof XBundleRevision && refreshingBundles.contains(((XBundleRevision) requirer).getBundle())) == false;

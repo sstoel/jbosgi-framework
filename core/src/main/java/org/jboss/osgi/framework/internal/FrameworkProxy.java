@@ -178,7 +178,7 @@ final class FrameworkProxy implements Framework {
 
             bundleManager.setFramework(this);
             // The headers of the system bundle stay available when the framework is not running
-            getRunningSystemBundle();
+            recordLastHeaders();
 
             if (frameworkListeners != null) {
                 for (FrameworkListener listener : frameworkListeners) {
@@ -274,7 +274,9 @@ final class FrameworkProxy implements Framework {
                 throw serviceTracker.getFirstFailure();
             }
 
-            bundleManager.setManagerState(Bundle.ACTIVE);
+            // An activator may have stopped the framework while the start level was raised: the stop is not undone,
+            // a second stop does not run (FW-02 of the release check)
+            bundleManager.compareAndSetManagerState(Bundle.STARTING, Bundle.ACTIVE);
 
         } catch (BundleException ex) {
             throw ex;
@@ -312,7 +314,7 @@ final class FrameworkProxy implements Framework {
         boolean interrupted = Thread.interrupted();
         try {
             awaitUpdate();
-            getRunningSystemBundle();
+            recordLastHeaders();
             if (bundleManager != null)
                 bundleManager.stopFramework(FrameworkEvent.STOPPED, null);
         } finally {
@@ -515,11 +517,17 @@ final class FrameworkProxy implements Framework {
         if (manager == null || manager.hasStopped())
             return null;
         SystemBundleState systemBundle = manager.getSystemBundle();
-        if (systemBundle != null) {
-            lastHeaders = new Hashtable<String, String>(toMap(systemBundle.getHeaders()));
+        if (systemBundle != null)
             lastModified = systemBundle.getLastModified();
-        }
         return systemBundle;
+    }
+
+    // The headers of the system bundle stay available when the framework is not running. They are copied when the
+    // framework was initialized and before it stops, not on every call of a method of the framework
+    private void recordLastHeaders() {
+        SystemBundleState systemBundle = getRunningSystemBundle();
+        if (systemBundle != null)
+            lastHeaders = new Hashtable<String, String>(toMap(systemBundle.getHeaders()));
     }
 
     private static Map<String, String> toMap(Dictionary<String, String> dictionary) {

@@ -67,8 +67,11 @@ import org.osgi.framework.launch.FrameworkFactory;
  * <h2>Reproduction</h2>
  * <pre>
  * cd jbosgi-framework
- * mvn -Dmaven.compiler.proc=full -pl itest test -Dtest=FrameworkStopUpdateRaceIssueTestCase
+ * mvn -pl itest test -Dtest=FrameworkStopUpdateRaceIssueTestCase
  * </pre>
+ * The update right after the stop races with the stop thread, which the first round in a JVM tends to win: the test
+ * repeats it in one JVM (R8 release check, baseline-check 4.3; the first version ran it once and caught the race in 1
+ * of 9 runs).
  *
  * <h2>Expected</h2>
  * The framework is stopped once. An update after a stop does nothing, a stop of the system bundle during an update
@@ -91,19 +94,31 @@ public class FrameworkStopUpdateRaceIssueTestCase {
 
     @Test
     public void testUpdateRightAfterStop() throws Exception {
-        framework = newFramework("stop-update");
-        AtomicInteger stopping = countSystemBundleStopping();
+        int badRounds = 0;
+        String first = null;
+        for (int round = 0; round < 20; round++) {
+            framework = newFramework("stop-update");
+            AtomicInteger stopping = countSystemBundleStopping();
 
-        framework.stop();
-        framework.update();
-        FrameworkEvent event = framework.waitForStop(20000);
-        assertEquals("The framework stopped", FrameworkEvent.STOPPED, event.getType());
+            framework.stop();
+            framework.update();
+            FrameworkEvent event = framework.waitForStop(20000);
 
-        // An update thread that passed the state check would start the framework again
-        for (int i = 0; i < 20 && framework.getState() == Bundle.RESOLVED; i++)
-            Thread.sleep(50);
-        assertEquals("The framework stays stopped", Bundle.RESOLVED, framework.getState());
-        assertEquals("The framework is stopped once", 1, stopping.get());
+            // An update thread that passed the state check would start the framework again
+            for (int i = 0; i < 15 && framework.getState() == Bundle.RESOLVED; i++)
+                Thread.sleep(20);
+            String outcome = "event " + event.getType() + ", state " + framework.getState() + ", system bundle STOPPING events " + stopping.get();
+            if (event.getType() != FrameworkEvent.STOPPED || framework.getState() != Bundle.RESOLVED || stopping.get() != 1) {
+                badRounds++;
+                if (first == null)
+                    first = "round " + round + ": " + outcome;
+            }
+            if (framework.getState() != Bundle.RESOLVED) {
+                framework.stop();
+                framework.waitForStop(20000);
+            }
+        }
+        assertEquals("Rounds in which the framework was not stopped once and stays stopped (STOPPED=64, RESOLVED=4), the first: " + first, 0, badRounds);
     }
 
     @Test

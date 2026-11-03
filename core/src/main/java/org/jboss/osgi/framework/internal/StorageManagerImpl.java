@@ -129,8 +129,12 @@ public final class StorageManagerImpl implements StorageManager {
                     LOGGER.warnf(ex, "Cannot read the bundle storage, it is skipped: %s", storageDir);
                     continue;
                 } catch (RuntimeException ex) {
-                    // A directory without complete properties or without the content they name, like one that a failed
-                    // or interrupted install left behind, never becomes a bundle (connect/24)
+                    // The directory of the system bundle has its data area, which a bundle may have written before the
+                    // first init, when the directory has no properties yet (FW-09 of the release check)
+                    if (storageDir.getName().equals(StorageState.BUNDLE_DIRECTORY_PREFIX + "0"))
+                        continue;
+                    // A directory without complete properties, like one that a failed or interrupted install left
+                    // behind, never becomes a bundle: the properties are written last (connect/24)
                     LOGGER.warnf(ex, "Removing the bundle storage that cannot be restored: %s", storageDir);
                     deleteRecursive(storageDir);
                     continue;
@@ -146,18 +150,34 @@ public final class StorageManagerImpl implements StorageManager {
         }
     }
 
+    /**
+     * The storage state of a bundle directory, null if it has none. A bundle whose content is missing, or whose module
+     * connector fails, keeps its storage with its data area: it gets a storage state without content, which the framework
+     * does not install at this launch. The content is written before the properties name it, a crash does not give that
+     * state; a damaged or partly restored storage does. The bundle comes back with its content, a deployment of the
+     * server that has its location gets its id and data area (RA-05 and FW-08 of the release check).
+     */
     private StorageState restoreStorageState(File storageDir) throws IOException {
         Properties props = StorageState.loadProperties(storageDir);
-        if (Boolean.parseBoolean(props.getProperty(StorageState.PROPERTY_CONNECT_BUNDLE)) == false)
+        String location = props.getProperty(StorageState.PROPERTY_BUNDLE_LOCATION);
+        if (Boolean.parseBoolean(props.getProperty(StorageState.PROPERTY_CONNECT_BUNDLE)) == false) {
+            String bundleFile = props.getProperty(StorageState.PROPERTY_BUNDLE_FILE);
+            if (bundleFile != null && new File(storageDir, bundleFile).isFile() == false) {
+                StorageState storageState = new StorageState(storageDir, null, props);
+                LOGGER.warnf("The content of the bundle with location %s is missing, the bundle is not installed, its storage is kept: %s", location, storageDir);
+                return storageState;
+            }
             return StorageState.createStorageState(storageDir);
+        }
 
         // A connect bundle exists for as long as the module connector provides its content
-        String location = props.getProperty(StorageState.PROPERTY_BUNDLE_LOCATION);
         VirtualFile rootFile = null;
         try {
             rootFile = bundleManager.connect(location);
-        } catch (BundleException ex) {
-            LOGGER.debugf(ex, "Cannot connect bundle: %s", location);
+        } catch (BundleException | RuntimeException ex) {
+            StorageState storageState = new StorageState(storageDir, null, props);
+            LOGGER.warnf(ex, "Cannot connect the bundle with location %s, the bundle is not installed, its storage is kept: %s", location, storageDir);
+            return storageState;
         }
         if (rootFile == null) {
             LOGGER.debugf("Removing connect bundle that has no content: %s", location);
@@ -322,6 +342,28 @@ public final class StorageManagerImpl implements StorageManager {
             VFSUtils.safeClose(storageState.getRootFile());
         deleteRecursive(storageState.getStorageDir());
         storageStates.remove(storageState.getLocation());
+    }
+
+    /**
+     * The storage of a bundle whose update failed is the one of its current revision again: its properties are written
+     * again and the content of the rejected revision is deleted. Otherwise the next launch restores the rejected
+     * revision (FW-03 of the release check).
+     */
+    synchronized void revertUpdateStorageState(StorageState current, StorageState rejected) {
+        if (current == rejected || current.getStorageDir().equals(rejected.getStorageDir()) == false)
+            return;
+        LOGGER.debugf("Reverting the storage state of a failed update: %s", rejected);
+        try {
+            current.storeProperties();
+        } catch (IOException ex) {
+            LOGGER.errorCannotWritePersistentStorage(ex, current.getStorageDir());
+        }
+        String rejectedFile = rejected.getProperties().getProperty(StorageState.PROPERTY_BUNDLE_FILE);
+        String currentFile = current.getProperties().getProperty(StorageState.PROPERTY_BUNDLE_FILE);
+        if (rejectedFile != null && rejectedFile.equals(currentFile) == false)
+            new File(rejected.getStorageDir(), rejectedFile).delete();
+        if (current.getBundleId() != 0)
+            storageStates.put(current.getLocation(), current);
     }
 
     @Override

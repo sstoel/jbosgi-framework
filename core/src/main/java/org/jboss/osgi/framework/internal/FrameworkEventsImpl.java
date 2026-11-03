@@ -335,7 +335,13 @@ final class FrameworkEventsImpl implements FrameworkEvents {
         // Each hook is obtained for the call and released after it, in the order of the service ranking
         Arrays.sort(srefs, Collections.reverseOrder());
         for (ServiceReference<?> sref : srefs) {
-            ListenerHook hook = (ListenerHook) syscontext.getService(sref);
+            ListenerHook hook;
+            try {
+                hook = (ListenerHook) syscontext.getService(sref);
+            } catch (IllegalStateException ex) {
+                // the framework stopped
+                return;
+            }
             if (hook == null)
                 continue;
             try {

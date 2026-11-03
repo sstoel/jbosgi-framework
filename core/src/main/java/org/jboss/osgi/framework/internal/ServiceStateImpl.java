@@ -38,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -86,6 +88,9 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
     private boolean prototypeValuesReleased;
     // Only one thread unregisters the service, the others see it as unregistered
     private final AtomicBoolean unregistering = new AtomicBoolean();
+    // The thread that unregisters the service, and the end of its unregistration
+    private volatile Thread unregisteringThread;
+    private final CountDownLatch unregistered = new CountDownLatch(1);
     // The UNREGISTERING event was delivered: the service cannot be obtained any more
     private volatile boolean released;
 
@@ -447,16 +452,42 @@ final class ServiceStateImpl<S> implements ServiceState<S> {
         unregisterService();
     }
 
+    /**
+     * The framework unregisters the service, e.g. when its bundle stops. When another thread unregisters it already, this
+     * waits until that is done: the stop of the bundle does not end while UNREGISTERING listeners and the release of the
+     * service objects still run, possibly after the bundle's class loader went away (fw-small-05). A listener of that
+     * unregistration that stops the bundle does not wait for itself; the wait is bounded like the waits for the locks
+     * of the framework.
+     */
     @Override
     public void unregisterInternal() {
-        if (unregistering.compareAndSet(false, true))
+        if (unregistering.compareAndSet(false, true)) {
             unregisterService();
+            return;
+        }
+        if (Thread.currentThread() == unregisteringThread)
+            return;
+        try {
+            if (unregistered.await(UNREGISTER_WAIT_TIMEOUT, TimeUnit.SECONDS) == false)
+                LOGGER.debugf("Another thread did not complete the unregistration of %s in %d s", this, UNREGISTER_WAIT_TIMEOUT);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
     }
 
+    // The time that the framework waits for the unregistration of a service by another thread, in seconds
+    private static final long UNREGISTER_WAIT_TIMEOUT = 30;
+
     private void unregisterService() {
-        serviceManager.unregisterService(this);
-        usingBundles = null;
-        registration = null;
+        unregisteringThread = Thread.currentThread();
+        try {
+            serviceManager.unregisterService(this);
+            usingBundles = null;
+            registration = null;
+        } finally {
+            unregisteringThread = null;
+            unregistered.countDown();
+        }
     }
 
     @Override

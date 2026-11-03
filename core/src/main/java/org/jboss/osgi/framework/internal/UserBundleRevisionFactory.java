@@ -80,6 +80,9 @@ abstract class UserBundleRevisionFactory<R extends UserBundleRevision> {
     R create() throws BundleException {
         LOGGER.debugf("%s for: %s", getClass().getSimpleName(), deployment);
         StorageState storageState = null;
+        // The storage of a bundle that is restored from the storage is kept when the bundle cannot be created again: with
+        // its data area, for a launch that can create it (RA-05 of the release check)
+        boolean restored = deployment.getAttachment(STORAGE_STATE_KEY) != null;
         try {
             Deployment dep = deployment;
             RevisionIdentifier revIdentifier = dep.getAttachment(REVISION_IDENTIFIER_KEY);
@@ -104,7 +107,7 @@ abstract class UserBundleRevisionFactory<R extends UserBundleRevision> {
                 installBundleRevision(userBundle, bundleRevision);
             }
         } catch (Exception ex) {
-            throw handleCreateException(storageState, ex);
+            throw handleCreateException(restored ? null : storageState, ex);
         }
         return bundleRevision;
     }

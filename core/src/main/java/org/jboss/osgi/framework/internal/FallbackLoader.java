@@ -497,14 +497,16 @@ final class FallbackLoader implements LocalLoader {
      * A candidate is consistent with the class space of the host when every package that it uses, directly or through
      * the uses of the packages it uses, and that the host sees comes from the same provider for both (uses constraint,
      * 3.7.6). The host sees packages through its import wires, its own exports and its required bundles (resolver/04).
+     * A split package, from more than one required bundle or from a facade that exports it too, has several providers:
+     * the host is consistent with it when it sees one of them (FW-07 of the release check).
      */
     private boolean isUsesConsistent(XPackageCapability cap) {
-        Map<String, BundleRevision> implied = new HashMap<String, BundleRevision>();
+        Map<String, Set<BundleRevision>> implied = new HashMap<String, Set<BundleRevision>>();
         if (collectImpliedPackages(cap, implied, new HashSet<XPackageCapability>()) == false)
             return false;
-        for (Map.Entry<String, BundleRevision> entry : implied.entrySet()) {
+        for (Map.Entry<String, Set<BundleRevision>> entry : implied.entrySet()) {
             Set<BundleRevision> hostSources = getPackageSources(hostRev, entry.getKey());
-            if (hostSources.isEmpty() == false && hostSources.contains(entry.getValue()) == false)
+            if (hostSources.isEmpty() == false && Collections.disjoint(hostSources, entry.getValue()))
                 return false;
         }
         return true;
@@ -512,11 +514,11 @@ final class FallbackLoader implements LocalLoader {
 
     /**
      * Add the packages that the uses directive of the capability implies, with the revisions that provide them, also
-     * those of the used packages in turn
+     * those of the used packages in turn. A package that is implied twice keeps the providers that both have.
      *
-     * @return false if the capability implies two providers of one package
+     * @return false if the capability implies two providers of one package that have nothing in common
      */
-    private boolean collectImpliedPackages(XPackageCapability cap, Map<String, BundleRevision> implied, Set<XPackageCapability> visited) {
+    private boolean collectImpliedPackages(XPackageCapability cap, Map<String, Set<BundleRevision>> implied, Set<XPackageCapability> visited) {
         if (visited.add(cap) == false)
             return true;
         String uses = cap.getDirective(Constants.USES_DIRECTIVE);
@@ -527,11 +529,20 @@ final class FallbackLoader implements LocalLoader {
             usedPackage = usedPackage.trim();
             if (usedPackage.isEmpty())
                 continue;
-            for (XPackageCapability usedCap : getPackageSourceCapabilities(exporter, usedPackage)) {
-                BundleRevision source = (BundleRevision) usedCap.getResource();
-                BundleRevision previous = implied.put(usedPackage, source);
-                if (previous != null && previous != source)
+            List<XPackageCapability> usedCaps = getPackageSourceCapabilities(exporter, usedPackage);
+            if (usedCaps.isEmpty())
+                continue;
+            Set<BundleRevision> sources = new HashSet<BundleRevision>();
+            for (XPackageCapability usedCap : usedCaps)
+                sources.add((BundleRevision) usedCap.getResource());
+            Set<BundleRevision> previous = implied.get(usedPackage);
+            if (previous != null) {
+                sources.retainAll(previous);
+                if (sources.isEmpty())
                     return false;
+            }
+            implied.put(usedPackage, sources);
+            for (XPackageCapability usedCap : usedCaps) {
                 if (collectImpliedPackages(usedCap, implied, visited) == false)
                     return false;
             }

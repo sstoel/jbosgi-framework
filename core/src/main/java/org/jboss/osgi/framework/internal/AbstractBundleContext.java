@@ -254,8 +254,9 @@ abstract class AbstractBundleContext<T extends XBundle> implements BundleContext
     @Override
     public Bundle getBundle(long id) {
         asertNotDestroyed();
+        // An uninstalled bundle is not installed in the framework any more, also while its revisions are in use
         Bundle result = getBundleManager().getBundleById(id);
-        if (result == null)
+        if (result == null || result.getState() == Bundle.UNINSTALLED)
             return null;
 
         // Call the {@link FindHook}

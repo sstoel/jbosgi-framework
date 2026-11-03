@@ -74,11 +74,12 @@ final class PersistentBundlesInstallPlugin extends BootstrapBundlesInstall<Void>
         final StorageManager storageStatePlugin = injectedStoragePlugin.getValue();
         final Set<StorageState> storageStates = new HashSet<StorageState>(storageStatePlugin.getStorageStates());
 
-        // Reduce the set by the bundles that are already installed
+        // Reduce the set by the bundles that are already installed, and by those whose content is missing: their storage
+        // is kept for the launch that has their content again
         Iterator<StorageState> iterator = storageStates.iterator();
         while (iterator.hasNext()) {
             StorageState storageState = iterator.next();
-            if (getBundleManager().getBundleById(storageState.getBundleId()) != null) {
+            if (storageState.getRootFile() == null || getBundleManager().getBundleById(storageState.getBundleId()) != null) {
                 iterator.remove();
             }
         }

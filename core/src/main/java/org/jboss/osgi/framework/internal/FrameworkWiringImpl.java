@@ -41,6 +41,7 @@ import org.jboss.osgi.framework.spi.BundleLifecycle.BundleRefreshPolicy;
 import org.jboss.osgi.framework.spi.BundleManager;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.FrameworkWiringLock;
+import org.jboss.osgi.framework.spi.LockException;
 import org.jboss.osgi.framework.spi.LockManager;
 import org.jboss.osgi.framework.spi.LockManager.LockContext;
 import org.jboss.osgi.framework.spi.LockManager.LockableItem;
@@ -153,7 +154,7 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
 
         Runnable runner = new Runnable() {
             public void run() {
-                refreshBundlesInternal(dependencyClosure, listeners);
+                refreshBundlesInternal(bundlesToRefresh, dependencyClosure, listeners);
             }
         };
 
@@ -180,10 +181,10 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
     /**
      * The listeners get the PACKAGES_REFRESHED event also when the refresh failed, the failure is an ERROR event
      */
-    private void refreshBundlesInternal(List<XBundle> dependencyClosure, FrameworkListener... listeners) {
+    private void refreshBundlesInternal(List<Bundle> bundlesToRefresh, List<XBundle> dependencyClosure, FrameworkListener... listeners) {
         XBundle systemBundle = bundleManager.getSystemBundle();
         try {
-            refreshBundlesLocked(dependencyClosure);
+            refreshBundlesLocked(bundlesToRefresh, dependencyClosure);
         } catch (Throwable th) {
             events.fireFrameworkEvent(systemBundle, FrameworkEvent.ERROR, th);
         } finally {
@@ -191,7 +192,7 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         }
     }
 
-    private void refreshBundlesLocked(List<XBundle> dependencyClosure) {
+    private void refreshBundlesLocked(List<Bundle> bundlesToRefresh, List<XBundle> dependencyClosure) {
 
         List<XBundle> stopList = new ArrayList<XBundle>();
         List<XBundle> uninstallBundles = new ArrayList<XBundle>();
@@ -207,6 +208,20 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
         LockContext wiringContext = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, new LockableItem[] { wireLock }));
         LockContext bundlesContext = null;
         try {
+            // The closure was computed before the refresh had its locks: a bundle that was resolved against a bundle of
+            // the closure meanwhile belongs to it now, it would keep its wires to the revisions that the refresh removes.
+            // A larger closure is locked as a whole again (FW-01 of the release check)
+            List<XBundle> added = getAddedToClosure(bundlesToRefresh, dependencyClosure);
+            while (added.isEmpty() == false) {
+                LOGGER.debugf("Dependency closure grew by %s", added);
+                lockManager.unlockItems(wiringContext);
+                wiringContext = null;
+                dependencyClosure.addAll(added);
+                bundles = dependencyClosure.toArray(new XBundle[dependencyClosure.size()]);
+                wiringContext = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, new LockableItem[] { wireLock }));
+                added = getAddedToClosure(bundlesToRefresh, dependencyClosure);
+            }
+
             // The states are taken under the locks: a bundle that was started while the refresh waited is stopped too
             for (Bundle auxBundle : dependencyClosure) {
                 XBundle bundle = (XBundle) auxBundle;
@@ -220,6 +235,11 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
 
             BundleStartLevelComparator startLevelComparator = new BundleStartLevelComparator();
             Collections.sort(stopList, startLevelComparator);
+            Set<XBundle> persistentlyStarted = new HashSet<XBundle>();
+            for (XBundle bundle : stopList) {
+                if (bundle instanceof AbstractBundleState && ((AbstractBundleState<?>) bundle).isPersistentlyStarted())
+                    persistentlyStarted.add(bundle);
+            }
 
             for (ListIterator<XBundle> it = stopList.listIterator(stopList.size()); it.hasPrevious();) {
                 XBundle bundle = it.previous();
@@ -247,9 +267,19 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             if (wiringContext == null) {
                 lockManager.unlockItems(bundlesContext);
                 bundlesContext = null;
-                wiringContext = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, new LockableItem[] { wireLock }));
+                // The bundles are locked with the wiring lock again for their start. When the locks cannot be obtained in
+                // time the bundles are started without them, each start takes its own: the bundles do not stay stopped
+                // (FW-12 of the release check)
+                try {
+                    wiringContext = lockManager.lockItems(Method.REFRESH, LockUtils.getLockableItems(bundles, new LockableItem[] { wireLock }));
+                } catch (LockException ex) {
+                    LOGGER.warnf(ex, "The refreshed bundles are started without the locks of the refresh: %s", stopList);
+                }
             }
             for (XBundle bundle : stopList) {
+                // A bundle that was stopped persistently while the refresh did not hold its lock stays stopped
+                if (persistentlyStarted.contains(bundle) && bundle instanceof AbstractBundleState && ((AbstractBundleState<?>) bundle).isPersistentlyStarted() == false)
+                    continue;
                 try {
                     bundleManager.startBundleLifecycle(bundle, Bundle.START_TRANSIENT);
                 } catch (Exception th) {
@@ -262,6 +292,21 @@ public final class FrameworkWiringImpl implements FrameworkWiring {
             if (wiringContext != null)
                 lockManager.unlockItems(wiringContext);
         }
+    }
+
+    // The bundles of the dependency closure of the bundles to refresh that are not in the given closure
+    private List<XBundle> getAddedToClosure(List<Bundle> bundlesToRefresh, List<XBundle> dependencyClosure) {
+        List<XBundle> added = new ArrayList<XBundle>();
+        LockContext lockContext = lockEnvironment(LockManager.Method.REFRESH);
+        try {
+            for (Bundle aux : getDependencyClosure(bundlesToRefresh)) {
+                if (dependencyClosure.contains(aux) == false)
+                    added.add((XBundle) aux);
+            }
+        } finally {
+            unlockEnvironment(lockContext);
+        }
+        return added;
     }
 
     // Refresh the bundles of the dependency closure, the stopped ones are started again by the caller

@@ -37,6 +37,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -51,6 +52,11 @@ import org.jboss.osgi.framework.spi.BundleLifecycle.BundleRefreshPolicy;
 import org.jboss.osgi.framework.spi.DeploymentProvider;
 import org.jboss.osgi.framework.spi.FrameworkEvents;
 import org.jboss.osgi.framework.spi.IntegrationConstants;
+import org.jboss.osgi.framework.spi.LockException;
+import org.jboss.osgi.framework.spi.LockManager;
+import org.jboss.osgi.framework.spi.LockManager.LockContext;
+import org.jboss.osgi.framework.spi.LockManager.LockableItem;
+import org.jboss.osgi.framework.spi.LockManager.Method;
 import org.jboss.osgi.framework.spi.ModuleManager;
 import org.jboss.osgi.framework.spi.ServiceManager;
 import org.jboss.osgi.framework.spi.ServiceState;
@@ -63,10 +69,12 @@ import org.jboss.osgi.metadata.OSGiMetaDataBuilder;
 import org.jboss.osgi.resolver.XBundle;
 import org.jboss.osgi.resolver.XBundleRevision;
 import org.jboss.osgi.resolver.XRequirement;
+import org.jboss.osgi.resolver.XResource;
 import org.jboss.osgi.resolver.XWiringSupport;
 import org.jboss.osgi.resolver.spi.AbstractBundleWiring;
 import org.jboss.osgi.resolver.spi.ResolverHookException;
 import org.jboss.osgi.vfs.AbstractVFS;
+import org.jboss.osgi.vfs.VFSUtils;
 import org.jboss.osgi.vfs.VirtualFile;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleActivator;
@@ -98,6 +106,10 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
     private final AtomicBoolean awaitLazyActivation = new AtomicBoolean();
     // A class was loaded from the bundle while it waited for its start level to be activated lazily
     private final AtomicBoolean classLoadedBeforeLazyStart = new AtomicBoolean();
+    // The class loader of the bundle had the first request that activated the bundle lazily: the trigger is relative to
+    // the class loader, a bundle that is stopped and started again is not lazily started until a refresh or an update
+    // gives it a new class loader (4.4.6.2, regression 5 of the release check)
+    private final AtomicBoolean lazyActivationTriggered = new AtomicBoolean();
     // The activation policy option of the last start, null if the bundle was not started since it was installed
     private volatile Boolean lastStartUsedActivationPolicy;
     private final AtomicInteger revisionIndex = new AtomicInteger();
@@ -184,6 +196,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             if (startLevelValidForStart() == true) {
                 // The declared activation policy was applied when the bundle was started, the trigger activates it
                 int options = START_TRANSIENT;
+                lazyActivationTriggered.set(true);
                 LOGGER.debugf("Lazy activation of: %s", this);
                 getBundleManager().startBundleLifecycle(this, options);
             }
@@ -289,12 +302,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
 
         LOGGER.debugf("Updating bundle: %s", this);
 
-        // A bundle that was started with its declared activation policy is started that way again, also after a
-        // transient start: a lazily started bundle waits for its activation again (fuzz/17)
-        int restartOptions = Bundle.START_TRANSIENT;
-        Boolean policyUsed = lastStartUsedActivationPolicy;
-        if (policyUsed != null ? policyUsed.booleanValue() : adapt(BundleStartLevel.class).isActivationPolicyUsed())
-            restartOptions |= Bundle.START_ACTIVATION_POLICY;
+        int restartOptions = getRestartOptions();
 
         // The bundle manager stopped the bundle before it took the locks of the update. If this bundle's state was
         // originally ACTIVE or STARTING, the updated bundle is started again
@@ -326,9 +334,14 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             throw ex;
         }
 
+        boolean wiringLocked;
         try {
-            // Create the update revision
+            // Create the update revision. Its class loader has not had a request yet
             createUpdateRevision(input, connectRoot);
+            lazyActivationTriggered.set(false);
+
+            // The wiring of the bundle changes under the framework wiring lock
+            wiringLocked = getBundleManager().lockWiringForUpdate(this);
 
             // The bundle is INSTALLED with its new revision, a resolved bundle is unresolved
             boolean wasResolved = getState() != Bundle.INSTALLED;
@@ -338,7 +351,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             currentRev.getWiringSupport().makeUneffective();
 
             // The connect content of a revision that is not in use is closed right away
-            if (currentRev.getWiringSupport().getWiring(false) == null)
+            if (wiringLocked && currentRev.getWiringSupport().getWiring(false) == null)
                 currentRev.closeConnectContent();
         } catch (Exception ex) {
             boolean isbe = (ex instanceof BundleException);
@@ -355,7 +368,7 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         // pending until the next refresh
         BundleWiring oldWiring = currentRev.getWiringSupport().getWiring(false);
         boolean inUse = oldWiring != null && (oldWiring.isInUse() || getFrameworkState().getFrameworkModuleLoader().isModuleInUse(currentRev));
-        if (inUse == false && currentRev != getBundleRevision()) {
+        if (wiringLocked && inUse == false && currentRev != getBundleRevision()) {
             // Its module and class loader are removed with it, as a refresh does
             if (currentRev.isFragment() == false) {
                 ModuleManager moduleManager = getFrameworkState().getModuleManager();
@@ -371,6 +384,18 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         // If this bundle's state was originally ACTIVE or STARTING, the updated bundle is started like with Bundle.start,
         // through the bundle lifecycle: an integration may have to activate the deployment of the new revision
         return restart ? restartOptions : -1;
+    }
+
+    /**
+     * The options of the start after an update: a bundle that was started with its declared activation policy is started
+     * that way again, also after a transient start, a lazily started bundle waits for its activation again (fuzz/17)
+     */
+    int getRestartOptions() {
+        int restartOptions = Bundle.START_TRANSIENT;
+        Boolean policyUsed = lastStartUsedActivationPolicy;
+        if (policyUsed != null ? policyUsed.booleanValue() : adapt(BundleStartLevel.class).isActivationPolicyUsed())
+            restartOptions |= Bundle.START_ACTIVATION_POLICY;
+        return restartOptions;
     }
 
     /**
@@ -406,39 +431,54 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         if (rootFile == null && input != null)
             rootFile = AbstractVFS.toVirtualFile(input);
 
+        StorageState currentState = getStorageState();
         StorageState storageState = createUpdateStorageState(getLocation(), rootFile);
-        DeploymentProvider deploymentManager = getFrameworkState().getDeploymentProvider();
-        Deployment dep = deploymentManager.createDeployment(storageState);
-        OSGiMetaData metadata = deploymentManager.createOSGiMetaData(dep);
-        dep.putAttachment(IntegrationConstants.OSGI_METADATA_KEY, metadata);
-        dep.putAttachment(IntegrationConstants.BUNDLE_KEY, this);
-        dep.setBundleUpdate(true);
-        dep.setAutoStart(false);
-
-        // Check for symbolic name, version uniqueness. The updates and installs of a symbolic name are serialized: the
-        // check and the creation of the revision are one step, a concurrent install of the same name and version cannot
-        // pass the check as well (concurrency/04)
-        String symbolicName = metadata.getBundleSymbolicName();
-        Version bundleVersion = metadata.getBundleVersion();
-        storageState.setSymbolicName(symbolicName);
-        BundleManagerPlugin bundleManager = getBundleManager();
-        String nameKey = BundleManagerPlugin.getNameLockKey(symbolicName);
-        Object nameLock = bundleManager.acquireInstallLock(nameKey);
         try {
-            bundleManager.lockName(this, nameLock);
-            try {
-                bundleManager.checkUniqunessPolicy(this, symbolicName, bundleVersion, CollisionHook.UPDATING);
+            DeploymentProvider deploymentManager = getFrameworkState().getDeploymentProvider();
+            Deployment dep = deploymentManager.createDeployment(storageState);
+            OSGiMetaData metadata = deploymentManager.createOSGiMetaData(dep);
+            dep.putAttachment(IntegrationConstants.OSGI_METADATA_KEY, metadata);
+            dep.putAttachment(IntegrationConstants.BUNDLE_KEY, this);
+            dep.setBundleUpdate(true);
+            dep.setAutoStart(false);
 
-                BundleContext syscontext = getFrameworkState().getSystemBundle().getBundleContext();
-                BundleLifecycle bundleLifecycle = getFrameworkState().getCoreServices().getBundleLifecycle();
-                XBundleRevision brev = bundleLifecycle.createBundleRevision(syscontext, dep);
-                return UserBundleRevision.assertBundleRevision(brev);
+            // Check for symbolic name, version uniqueness. The updates and installs of a symbolic name are serialized: the
+            // check and the creation of the revision are one step, a concurrent install of the same name and version
+            // cannot pass the check as well (concurrency/04)
+            String symbolicName = metadata.getBundleSymbolicName();
+            Version bundleVersion = metadata.getBundleVersion();
+            storageState.setSymbolicName(symbolicName);
+            BundleManagerPlugin bundleManager = getBundleManager();
+            String nameKey = BundleManagerPlugin.getNameLockKey(symbolicName);
+            Object nameLock = bundleManager.acquireInstallLock(nameKey);
+            try {
+                bundleManager.lockName(this, nameLock);
+                try {
+                    bundleManager.checkUniqunessPolicy(this, symbolicName, bundleVersion, CollisionHook.UPDATING);
+
+                    BundleContext syscontext = getFrameworkState().getSystemBundle().getBundleContext();
+                    BundleLifecycle bundleLifecycle = getFrameworkState().getCoreServices().getBundleLifecycle();
+                    XBundleRevision brev = bundleLifecycle.createBundleRevision(syscontext, dep);
+                    return UserBundleRevision.assertBundleRevision(brev);
+                } finally {
+                    bundleManager.unlockName(nameLock);
+                }
             } finally {
-                bundleManager.unlockName(nameLock);
+                bundleManager.releaseInstallLock(nameKey, nameLock);
             }
-        } finally {
-            bundleManager.releaseInstallLock(nameKey, nameLock);
+        } catch (BundleException | RuntimeException ex) {
+            // The update is rejected: the storage is the one of the current revision again, the next launch restores
+            // the bundle as it is (FW-03 of the release check)
+            revertUpdateStorageState(currentState, storageState);
+            throw ex;
         }
+    }
+
+    private void revertUpdateStorageState(StorageState currentState, StorageState rejected) {
+        StorageManager storageManager = getFrameworkState().getStorageManager();
+        if (currentState != null && storageManager instanceof StorageManagerImpl)
+            ((StorageManagerImpl) storageManager).revertUpdateStorageState(currentState, rejected);
+        VFSUtils.safeClose(rejected.getRootFile());
     }
 
     // The revisions do not share their content, the content of the replaced revision is closed when it is removed
@@ -543,11 +583,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
             }
 
             awaitLazyActivation.set(false);
+            lazyActivationTriggered.set(false);
             revisionIndex.set(1);
 
-            FrameworkEvents eventsPlugin = getFrameworkState().getFrameworkEvents();
+            // The listeners of the UNRESOLVED event see the bundle INSTALLED (TCK-2 of the release check)
             if (wasResolved)
-                eventsPlugin.fireBundleEvent(this, BundleEvent.UNRESOLVED);
+                changeState(Bundle.INSTALLED, BundleEvent.UNRESOLVED);
 
             refreshPolicy.refreshCurrentRevision(currentRev);
 
@@ -602,12 +643,12 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         else
             LOGGER.debugf("Has active wires: %s", this);
 
-        // Make the current {@link BundleWiring} uneffective and fire the UNRESOLVED event of a resolved bundle
+        // Make the current {@link BundleWiring} uneffective and fire the UNRESOLVED event of a resolved bundle, whose
+        // listeners see the bundle INSTALLED (TCK-2 of the release check)
         boolean wasResolved = getState() != Bundle.INSTALLED;
         getBundleRevision().getWiringSupport().makeUneffective();
-        FrameworkEvents eventsPlugin = getFrameworkState().getFrameworkEvents();
         if (wasResolved)
-            eventsPlugin.fireBundleEvent(this, BundleEvent.UNRESOLVED);
+            changeState(Bundle.INSTALLED, BundleEvent.UNRESOLVED);
 
         // #3 This bundle's state is set to UNINSTALLED
         changeState(Bundle.UNINSTALLED, 0);
@@ -644,22 +685,38 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         BundleManagerPlugin bundleManager = getBundleManager();
         Set<XBundle> uninstalled = bundleManager.getBundles(Bundle.UNINSTALLED);
         for (XBundle auxState : uninstalled) {
-            if (auxState != this) {
-                boolean bundleInUse = false;
-                XBundleRevision brev = auxState.getBundleRevision();
-                XWiringSupport wiringSupport = brev.getWiringSupport();
-                if (!wiringSupport.isEffective()) {
-                    BundleWiring bwiring = (BundleWiring) wiringSupport.getWiring(false);
-                    // Only this bundle stays, another uninstalled bundle may not be in use any more
-                    if (bwiring != null && bwiring.isInUse()) {
-                        bundleInUse = true;
-                    }
+            if (auxState != this && auxState instanceof UserBundleState) {
+                // The check and the removal are done under the lock of the bundle. A bundle whose lock another thread
+                // holds is skipped: a refresh that removes it, or another uninstall that does. Its revisions are removed
+                // once only, in the server its deployment is undeployed once (fw-small-03)
+                LockManager lockManager = getFrameworkState().getLockManager();
+                LockContext lockContext;
+                try {
+                    lockContext = lockManager.lockItems(Method.UNINSTALL, 0, TimeUnit.MILLISECONDS, (LockableItem) auxState);
+                } catch (LockException ex) {
+                    continue;
                 }
-                if (bundleInUse == false) {
-                    UserBundleState auxUser = UserBundleState.assertBundleState(auxState);
-                    bundleManager.unresolveBundle(auxUser);
-                    // The revisions are removed by the bundle lifecycle, like those of a bundle that is not in use
-                    bundleManager.removeBundle(auxUser, options | InternalConstants.UNINSTALL_INTERNAL);
+                try {
+                    XBundleRevision brev = auxState.getBundleRevision();
+                    if (brev.getState() == XResource.State.UNINSTALLED)
+                        continue;
+                    boolean bundleInUse = false;
+                    XWiringSupport wiringSupport = brev.getWiringSupport();
+                    if (!wiringSupport.isEffective()) {
+                        BundleWiring bwiring = (BundleWiring) wiringSupport.getWiring(false);
+                        // Only this bundle stays, another uninstalled bundle may not be in use any more
+                        if (bwiring != null && bwiring.isInUse()) {
+                            bundleInUse = true;
+                        }
+                    }
+                    if (bundleInUse == false) {
+                        UserBundleState auxUser = UserBundleState.assertBundleState(auxState);
+                        bundleManager.unresolveBundle(auxUser);
+                        // The revisions are removed by the bundle lifecycle, like those of a bundle that is not in use
+                        bundleManager.removeBundle(auxUser, options | InternalConstants.UNINSTALL_INTERNAL);
+                    }
+                } finally {
+                    lockManager.unlockItems(lockContext);
                 }
             }
         }
@@ -752,8 +809,15 @@ class UserBundleState extends AbstractBundleState<UserBundleRevision> {
         // #5 If the START_ACTIVATION_POLICY option is set and this bundle's declared activation policy is lazy
         boolean useActivationPolicy = (options & START_ACTIVATION_POLICY) != 0;
         lastStartUsedActivationPolicy = Boolean.valueOf(useActivationPolicy);
-        // A bundle from which a class was loaded while it waited for its start level is activated right away
-        if (isActivationLazy() && useActivationPolicy && classLoadedBeforeLazyStart.getAndSet(false) == false) {
+        // A bundle from which a class was loaded while it waited for its start level is activated right away, and so is a
+        // bundle whose class loader had the request that activated it lazily before: the first request is relative to the
+        // class loader (4.4.6.2)
+        boolean awaitTrigger = isActivationLazy() && useActivationPolicy;
+        if (awaitTrigger && (lazyActivationTriggered.get() || classLoadedBeforeLazyStart.getAndSet(false))) {
+            lazyActivationTriggered.set(true);
+            awaitTrigger = false;
+        }
+        if (awaitTrigger) {
 
             // #5.1 If this bundle's state is STARTING then this method returns immediately.
             if (getState() == STARTING)

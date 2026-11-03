@@ -50,40 +50,51 @@ import org.osgi.framework.launch.FrameworkFactory;
 
 /**
  * A bundle storage directory that an interrupted install left behind, with content but without its properties, or with
- * properties that name content that is not there, is skipped on every start and never removed.
+ * properties that name content that is not there, is skipped on every start and never removed. After that fix a
+ * missing content removed the bundle's directory with its data area for good, and so did a module connector that failed
+ * once, a data file of the system bundle that was written before the first init, and the user files of the old storage
+ * layout whose names end with .tmp.
  *
  * <h2>Severity</h2>
- * minor. The directories stay in the storage area for good, with a warning on every start.
+ * minor. The directories stay in the storage area for good, with a warning on every start. major for the second part:
+ * data that cannot be recovered is deleted on a transient condition.
  *
  * <h2>Component</h2>
- * jbosgi-framework, core: {@code StorageState.createStorageState}, {@code StorageManagerImpl.initialize}.
+ * jbosgi-framework, core: {@code StorageState.createStorageState}, {@code StorageManagerImpl.initialize},
+ * {@code StorageState.deleteTemporaryFiles}.
  *
  * <h2>Found by</h2>
- * R8 fix review, residual of connect/24 (fw-small, 0cad6c4a).
+ * R8 fix review, residual of connect/24 (fw-small, 0cad6c4a). R8 release check: RA-05, FW-08, FW-09, FW-10.
  *
  * <h2>Spec reference</h2>
- * OSGi Core R8 4.4.3: an installed bundle is persistent; a bundle that was not installed has no storage.
+ * OSGi Core R8 4.4.3: an installed bundle is persistent; a bundle that was not installed has no storage. 60.3.5: a
+ * connect bundle whose module connector has no content any more is discarded.
  *
  * <h2>Code location</h2>
  * core/src/main/java/org/jboss/osgi/framework/spi/StorageState.java:100-122,
- * core/src/main/java/org/jboss/osgi/framework/internal/StorageManagerImpl.java:121-130 (0cad6c4a).
+ * core/src/main/java/org/jboss/osgi/framework/internal/StorageManagerImpl.java:121-130 (0cad6c4a);
+ * StorageManagerImpl.java:131-136, :151-165, StorageState.java:144-152 (3093973d).
  *
  * <h2>Root cause</h2>
  * The content and the properties were written in place, a crash in between left a directory that cannot be restored.
- * Restore failures were only skipped.
+ * Restore failures were only skipped. The fix removed every directory that could not be restored. The content is
+ * written before the properties name it, so a directory whose content is missing is no interrupted install: it is a
+ * damaged or partly restored storage, whose data area must not be lost (user decision of the release check).
  *
  * <h2>Reproduction</h2>
  * <pre>
  * cd jbosgi-framework
- * mvn -Dmaven.compiler.proc=full -pl itest test -Dtest=IncompleteBundleStorageIssueTestCase
+ * mvn -pl itest test -Dtest=IncompleteBundleStorageIssueTestCase
  * </pre>
  *
  * <h2>Expected</h2>
- * The incomplete directories and the temporary files of an interrupted write are removed at the next start, the
- * installed bundles are restored.
+ * A directory without properties and the temporary files of an interrupted write are removed at the next start, the
+ * installed bundles are restored. A bundle whose content is missing is not installed, it keeps its directory and data
+ * area, and it is installed again with its data when its content is back. The data area of the system bundle and the
+ * user files of the old layout are kept.
  *
  * <h2>Regression vs WF41</h2>
- * no.
+ * no; the deletions of the second part are regressions of 3093973d.
  */
 public class IncompleteBundleStorageIssueTestCase extends OSGiTest {
 
@@ -99,7 +110,7 @@ public class IncompleteBundleStorageIssueTestCase extends OSGiTest {
     }
 
     @Test
-    public void testIncompleteStorageRemovedAtStart() throws Exception {
+    public void testIncompleteStorageAtStart() throws Exception {
         framework = newFramework(true);
         Bundle bundle = framework.getBundleContext().installBundle("incomplete-storage-ok", bundle("incomplete-storage-ok"));
         long bundleId = bundle.getBundleId();
@@ -135,9 +146,90 @@ public class IncompleteBundleStorageIssueTestCase extends OSGiTest {
         framework = newFramework(false);
         assertNotNull("The installed bundle is restored", framework.getBundleContext().getBundle("incomplete-storage-ok"));
         assertFalse("The directory without properties is removed: " + noProperties, noProperties.exists());
-        assertFalse("The directory without its content is removed: " + noContent, noContent.exists());
         assertEquals("The temporary file is removed", 0, temporaryFiles(bundleDir));
         assertEquals("No bundle is restored from the incomplete directories", null, framework.getBundleContext().getBundle("incomplete-storage-missing"));
+        assertTrue("The directory whose content is missing is kept: " + noContent, noContent.isDirectory());
+    }
+
+    @Test
+    public void testMissingContentKeepsDataArea() throws Exception {
+        framework = newFramework(true);
+        Bundle bundle = framework.getBundleContext().installBundle("incomplete-storage-data", bundle("incomplete-storage-data"));
+        long bundleId = bundle.getBundleId();
+        bundle.start();
+        File dataFile = bundle.getBundleContext().getDataFile("owner.txt");
+        write(dataFile, "incomplete-storage-data");
+        framework.stop();
+        framework.waitForStop(20000);
+
+        // The content of the bundle is gone, as from a damaged or partly restored storage
+        File bundleDir = new File(storage, "bundle-" + bundleId);
+        File content = null;
+        for (File file : bundleDir.listFiles()) {
+            if (file.getName().endsWith(".jar"))
+                content = file;
+        }
+        assertNotNull("The content of the bundle: " + bundleDir, content);
+        File moved = new File(storage.getParentFile(), content.getName() + ".moved");
+        assertTrue(content.renameTo(moved));
+
+        framework = newFramework(false);
+        assertEquals("The bundle without its content is not installed", null, framework.getBundleContext().getBundle("incomplete-storage-data"));
+        assertTrue("Its data area is kept: " + dataFile, dataFile.isFile());
+        framework.stop();
+        framework.waitForStop(20000);
+
+        // The content is back: the bundle is installed again, with its id and data area
+        assertTrue(moved.renameTo(content));
+        framework = newFramework(false);
+        Bundle restored = framework.getBundleContext().getBundle("incomplete-storage-data");
+        assertNotNull("The bundle is installed with its content again", restored);
+        assertEquals(bundleId, restored.getBundleId());
+        assertTrue("Its data area is kept", dataFile.isFile());
+    }
+
+    @Test
+    public void testSystemBundleDataBeforeFirstInit() throws Exception {
+        deleteRecursive(storage);
+        Map<String, String> props = new HashMap<String, String>();
+        props.put(Constants.FRAMEWORK_STORAGE, storage.getPath());
+        framework = ServiceLoader.loadService(FrameworkFactory.class).newFramework(props);
+        File dataFile = framework.getDataFile("before-init.txt");
+        assertNotNull("The framework has a data area before its init", dataFile);
+        dataFile.getParentFile().mkdirs();
+        write(dataFile, "before init");
+        framework.init();
+        assertTrue("The data file of the system bundle is kept: " + dataFile, dataFile.isFile());
+        framework.start();
+        assertTrue("The data file of the system bundle is kept: " + dataFile, framework.getBundleContext().getDataFile("before-init.txt").isFile());
+    }
+
+    @Test
+    public void testOwnTmpFileOfOldLayout() throws Exception {
+        framework = newFramework(true);
+        Bundle bundle = framework.getBundleContext().installBundle("incomplete-storage-oldlayout", bundle("incomplete-storage-oldlayout"));
+        long bundleId = bundle.getBundleId();
+        framework.stop();
+        framework.waitForStop(20000);
+
+        // The old layout has the files of a bundle in its directory, there is no data area yet
+        File bundleDir = new File(storage, "bundle-" + bundleId);
+        deleteRecursive(new File(bundleDir, "data"));
+        write(new File(bundleDir, "session.tmp"), "user data");
+
+        framework = newFramework(false);
+        Bundle restored = framework.getBundleContext().getBundle("incomplete-storage-oldlayout");
+        assertNotNull(restored);
+        restored.start();
+        File userFile = restored.getBundleContext().getDataFile("session.tmp");
+        assertTrue("A file of the bundle whose name ends with .tmp is kept: " + userFile, userFile.isFile());
+    }
+
+    private static void deleteRecursive(File file) {
+        File[] files = file.listFiles();
+        for (File aux : files != null ? files : new File[0])
+            deleteRecursive(aux);
+        file.delete();
     }
 
     private Framework newFramework(boolean clean) throws Exception {

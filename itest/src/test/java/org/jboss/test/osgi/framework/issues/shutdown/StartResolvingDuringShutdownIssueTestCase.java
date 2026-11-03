@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -68,7 +69,8 @@ import org.osgi.framework.wiring.BundleRevision;
  * jbosgi-framework, core: {@code UserBundleState.startInternalNow}, {@code BundleManagerPlugin.isFrameworkStopping}.
  *
  * <h2>Found by</h2>
- * R8 fix review, residual of shutdown/08 (fw-small-04).
+ * R8 fix review, residual of shutdown/08 (fw-small-04); the test made effective for the R8 release check
+ * (baseline-check 4.1).
  *
  * <h2>Spec reference</h2>
  * OSGi Core R8 4.2.7 Framework.stop: all installed bundles are stopped, no bundle is active after the stop.
@@ -83,10 +85,15 @@ import org.osgi.framework.wiring.BundleRevision;
  * <h2>Reproduction</h2>
  * <pre>
  * cd jbosgi-framework
- * mvn -Dmaven.compiler.proc=full -pl itest test -Dtest=StartResolvingDuringShutdownIssueTestCase
+ * mvn -pl itest test -Dtest=StartResolvingDuringShutdownIssueTestCase
  * </pre>
- * A resolver hook holds the start of X in its resolve until the stop has stopped bundle C. An asynchronous listener
- * keeps the framework from completing its stop until the start of X returned.
+ * A resolver hook holds the start of X in its resolve until the stop has stopped bundle C, has passed the bundles that
+ * became active meanwhile, and waits for the delivery of the events. The stop waits for the locks that the start of X
+ * holds until the lock timeout of the framework (30 s); an asynchronous listener keeps the framework from completing
+ * its stop until the start of X returned, the stop waits 10 s for the start level event that this listener holds up:
+ * the test takes about 40 s. The first version of the test released the resolve after 10 s, while the stop still waited
+ * for the locks of X: it then stopped X normally and the test passed without the fix too (R8 release check,
+ * baseline-check 4.1).
  *
  * <h2>Expected</h2>
  * X is not activated, or its activator is stopped again.
@@ -135,20 +142,25 @@ public class StartResolvingDuringShutdownIssueTestCase {
             public void bundleChanged(BundleEvent event) {
                 if (event.getBundle().equals(bundleC) && event.getType() == BundleEvent.STOPPED) {
                     cStopped.countDown();
-                    await(xStartReturned, 10);
+                    await(xStartReturned, 60);
                 }
             }
         });
 
-        // The resolve of X waits until the stop has stopped the active bundles
+        // The resolve of X waits until the stop has passed X and stopped the other active bundles
         final AtomicReference<Thread> starter = new AtomicReference<Thread>();
+        final AtomicBoolean stopPassedX = new AtomicBoolean();
         context.registerService(ResolverHookFactory.class, new ResolverHookFactory() {
             @Override
             public ResolverHook begin(Collection<BundleRevision> triggers) {
                 if (Thread.currentThread() == starter.get() && triggers.contains(bundleX.adapt(BundleRevision.class))) {
                     inResolve.countDown();
-                    await(cStopped, 10);
-                    sleep(500);
+                    stopPassedX.set(await(cStopped, 45));
+                    // The stop has stopped the bundles, without X whose lock this start holds, when it waits for the
+                    // delivery of the events
+                    for (int i = 0; i < 400 && isStopWaitingForEvents() == false; i++)
+                        sleep(50);
+                    sleep(100);
                 }
                 return new ResolverHook() {
                     public void filterResolvable(Collection<BundleRevision> candidates) {
@@ -185,18 +197,34 @@ public class StartResolvingDuringShutdownIssueTestCase {
         assertTrue("The start of X resolves X", inResolve.await(10, TimeUnit.SECONDS));
 
         framework.stop();
-        thread.join(30000);
-        FrameworkEvent stopped = framework.waitForStop(30000);
+        thread.join(60000);
+        FrameworkEvent stopped = framework.waitForStop(60000);
+        assertTrue("Precondition: the stop passed X while X resolved", stopPassedX.get());
         assertEquals("The framework stopped", FrameworkEvent.STOPPED, stopped.getType());
+        assertTrue("X is not active in the stopped framework, state " + bundleX.getState(), bundleX.getState() != Bundle.ACTIVE);
         assertEquals("The activator of X is not left running in the stopped framework (start of X: " + startResult.get() + ")",
                 counters[0].get(), counters[1].get());
     }
 
-    static void await(CountDownLatch latch, int seconds) {
+    // The stop thread of the framework waits for the executors of the framework, after it stopped the bundles
+    static boolean isStopWaitingForEvents() {
+        for (Map.Entry<Thread, StackTraceElement[]> entry : Thread.getAllStackTraces().entrySet()) {
+            if ("Framework stop thread".equals(entry.getKey().getName())) {
+                for (StackTraceElement element : entry.getValue()) {
+                    if (element.getMethodName().equals("awaitUninterruptibly"))
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    static boolean await(CountDownLatch latch, int seconds) {
         try {
-            latch.await(seconds, TimeUnit.SECONDS);
+            return latch.await(seconds, TimeUnit.SECONDS);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            return false;
         }
     }
 

@@ -64,7 +64,9 @@ public class BundleTrackerTestCase extends OSGiFrameworkTest {
         eventMap.put(bundleEvent(BundleEvent.RESOLVED), bundleState(Bundle.RESOLVED));
         eventMap.put(bundleEvent(BundleEvent.STARTED), bundleState(Bundle.ACTIVE));
         eventMap.put(bundleEvent(BundleEvent.STOPPED), bundleState(Bundle.RESOLVED));
-        eventMap.put(bundleEvent(BundleEvent.UNRESOLVED), bundleState(Bundle.RESOLVED));
+        // The state after the transition, like for the other events: unresolved is INSTALLED, as on Equinox and Felix
+        // (TCK-2 of the R8 release check)
+        eventMap.put(bundleEvent(BundleEvent.UNRESOLVED), bundleState(Bundle.INSTALLED));
         eventMap.put(bundleEvent(BundleEvent.UNINSTALLED), bundleState(Bundle.UNINSTALLED));
     }
 

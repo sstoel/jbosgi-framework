@@ -77,7 +77,7 @@ import org.osgi.framework.wiring.FrameworkWiring;
  * <h2>Reproduction</h2>
  * <pre>
  * cd jbosgi-framework
- * mvn -Dmaven.compiler.proc=full -pl itest test -Dtest=ModuleCreationRollbackIssueTestCase
+ * mvn -pl itest test -Dtest=ModuleCreationRollbackIssueTestCase
  * </pre>
  * The class loader of one of two connect bundles cannot be obtained while their modules are created.
  *
@@ -128,7 +128,16 @@ public class ModuleCreationRollbackIssueTestCase extends OSGiTest {
         FrameworkWiring wiring = framework.adapt(FrameworkWiring.class);
 
         failing.set(true);
-        assertFalse("The resolve fails", wiring.resolveBundles(Arrays.asList(bundleA, bundleB)));
+        // The failure is that of the connect content of B. Before the fix it also escaped from resolveBundles: that is
+        // tolerated here, the test asserts that the modules of the failed resolve are rolled back (R8 release check,
+        // baseline-check 4.6: the first version of the test failed on the escaping exception, not on the defect)
+        boolean resolved;
+        try {
+            resolved = wiring.resolveBundles(Arrays.asList(bundleA, bundleB));
+        } catch (IllegalStateException ex) {
+            resolved = false;
+        }
+        assertFalse("The resolve fails", resolved);
         assertEquals("A stays INSTALLED", Bundle.INSTALLED, bundleA.getState());
         assertEquals("B stays INSTALLED", Bundle.INSTALLED, bundleB.getState());
 

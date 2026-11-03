@@ -32,6 +32,8 @@ import org.jboss.osgi.testing.OSGiFrameworkTest;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.asset.Asset;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.Constants;
@@ -43,6 +45,23 @@ import org.osgi.framework.Constants;
  * @since 25-Jan-2010
  */
 public class LocalizationTestCase extends OSGiFrameworkTest {
+
+    private Locale defaultLocale;
+
+    // The headers of the default locale are those of the JVM's default locale: the test bundles have English and German
+    // translations, the test asserts the English ones also on a machine with another locale (runner 3.1 of the R8
+    // release check)
+    @Before
+    public void setEnglishLocale() {
+        defaultLocale = Locale.getDefault();
+        Locale.setDefault(Locale.ENGLISH);
+    }
+
+    @After
+    public void restoreLocale() {
+        if (defaultLocale != null)
+            Locale.setDefault(defaultLocale);
+    }
 
     @Test
     @SuppressWarnings("unchecked")

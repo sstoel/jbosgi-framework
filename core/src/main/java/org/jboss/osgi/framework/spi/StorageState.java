@@ -30,12 +30,15 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.HashSet;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.jboss.osgi.vfs.AbstractVFS;
 import org.jboss.osgi.vfs.VFSUtils;
@@ -63,6 +66,7 @@ public class StorageState {
     public static final String BUNDLE_PERSISTENT_PROPERTIES = "bundle-persistent.properties";
     // The suffix of a file that is written before it replaces the file of its name
     private static final String TMP_SUFFIX = ".tmp";
+    private static final AtomicLong TMP_COUNTER = new AtomicLong(System.nanoTime());
     public static final String BUNDLE_DIRECTORY_PREFIX = "bundle-";
 
     private final File storageDir;
@@ -129,6 +133,7 @@ public class StorageState {
                     input.close();
                 }
                 moveAtomically(tmpFile, revFile);
+                syncDirectory(storageDir);
             } finally {
                 tmpFile.delete();
             }
@@ -139,16 +144,26 @@ public class StorageState {
     }
 
     /**
-     * Delete the temporary files that a write left behind when it was interrupted
+     * Delete the temporary files that a write left behind when it was interrupted: only the names that the framework
+     * writes. In the storage layout before the data area a bundle's own files are in the bundle directory, a file of the
+     * bundle that ends with .tmp is not deleted (FW-10 of the release check).
      */
     public static void deleteTemporaryFiles(File storageDir) {
         File[] files = storageDir.listFiles();
         if (files != null) {
             for (File file : files) {
-                if (file.isFile() && file.getName().endsWith(TMP_SUFFIX))
+                if (file.isFile() && isTemporaryFile(file.getName()))
                     file.delete();
             }
         }
+    }
+
+    private static boolean isTemporaryFile(String name) {
+        // The properties: bundle-persistent.properties.<unique>.tmp, before also bundle-persistent.properties.tmp
+        if (name.startsWith(BUNDLE_PERSISTENT_PROPERTIES + ".") && name.endsWith(TMP_SUFFIX))
+            return true;
+        // The content of a revision: bundle-<id>-rev-<revision>.jar.tmp
+        return name.startsWith(BUNDLE_DIRECTORY_PREFIX) && name.endsWith(".jar" + TMP_SUFFIX) && name.contains("-rev-");
     }
 
     private static void moveAtomically(File source, File target) throws IOException {
@@ -264,9 +279,13 @@ public class StorageState {
     }
 
     public void setSymbolicName(String symbolicName) {
-        if (symbolicName == null || symbolicName.equals(getSymbolicName()))
+        if (symbolicName == null ? getSymbolicName() == null : symbolicName.equals(getSymbolicName()))
             return;
-        getProperties().setProperty(PROPERTY_SYMBOLIC_NAME, symbolicName);
+        // An update to a bundle without a symbolic name does not keep the name of the revision before
+        if (symbolicName == null)
+            getProperties().remove(PROPERTY_SYMBOLIC_NAME);
+        else
+            getProperties().setProperty(PROPERTY_SYMBOLIC_NAME, symbolicName);
         writeProperties();
     }
 
@@ -303,10 +322,13 @@ public class StorageState {
         }
     }
 
-    // The properties file is replaced as a whole: after a crash it has the old or the new properties
-    private synchronized void storeProperties() throws IOException {
+    /**
+     * Write the properties. The properties file is replaced as a whole: after a crash it has the old or the new properties
+     */
+    public synchronized void storeProperties() throws IOException {
         File propsFile = new File(getStorageDir() + "/" + BUNDLE_PERSISTENT_PROPERTIES);
-        File tmpFile = new File(getStorageDir() + "/" + BUNDLE_PERSISTENT_PROPERTIES + TMP_SUFFIX);
+        // The storage states of the revisions of a bundle share its directory: each write has a file of its own
+        File tmpFile = new File(getStorageDir(), BUNDLE_PERSISTENT_PROPERTIES + "." + TMP_COUNTER.incrementAndGet() + TMP_SUFFIX);
         try {
             FileOutputStream output = new FileOutputStream(tmpFile);
             try {
@@ -316,8 +338,21 @@ public class StorageState {
                 VFSUtils.safeClose(output);
             }
             moveAtomically(tmpFile, propsFile);
+            syncDirectory(getStorageDir());
         } finally {
             tmpFile.delete();
+        }
+    }
+
+    /**
+     * The rename of a file is durable once its directory is written: after a power loss the directory has the new file.
+     * Not every platform can sync a directory, then the rename is atomic but not durable.
+     */
+    private static void syncDirectory(File dir) {
+        try (FileChannel channel = FileChannel.open(dir.toPath(), StandardOpenOption.READ)) {
+            channel.force(true);
+        } catch (IOException | RuntimeException ex) {
+            LOGGER.tracef(ex, "Cannot sync the directory: %s", dir);
         }
     }
 

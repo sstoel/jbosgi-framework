@@ -62,7 +62,13 @@ final class EventAdminSupport {
     EventAdminSupport(BundleContext context) {
         this.context = context;
         String value = context.getProperty(PROPERTY_LOG_EVENTS);
-        this.mode = value != null ? value.trim().toLowerCase(Locale.ROOT) : "auto";
+        String aux = value != null ? value.trim().toLowerCase(Locale.ROOT) : "auto";
+        // An unknown value is not taken silently for the default
+        if (aux.equals("auto") == false && aux.equals("true") == false && aux.equals("false") == false) {
+            LOGGER.warnf("Unknown value %s of %s, it is auto, true or false: auto is used", value, PROPERTY_LOG_EVENTS);
+            aux = "auto";
+        }
+        this.mode = aux;
     }
 
     synchronized void open() {
