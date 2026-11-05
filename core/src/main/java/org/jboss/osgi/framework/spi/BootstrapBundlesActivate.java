@@ -83,6 +83,10 @@ public class BootstrapBundlesActivate<T> extends BootstrapBundlesService<T> {
 
         // We are done
         installCompleteService(startContext.getChildTarget());
+
+        // The service stays up for the life of the framework; a bundle that is uninstalled later must not stay
+        // reachable from it, with its revisions and their class loaders
+        resolvedBundles.clear();
     }
 
     /**

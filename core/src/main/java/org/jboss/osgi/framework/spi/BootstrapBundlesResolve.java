@@ -150,6 +150,10 @@ public class BootstrapBundlesResolve<T> extends BootstrapBundlesService<T> {
         }
 
         installActivateService(context.getChildTarget(), resolvableBundles);
+
+        // The service stays up for the life of the framework. The revisions are not needed any more, and a revision
+        // that is uninstalled later keeps its class loader for as long as it is referenced.
+        installedRevisions.clear();
     }
 
     private int getBeginningStartLevel() {
